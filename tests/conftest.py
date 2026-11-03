@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
+FAKE_HASH = "$2b$04$abcdefghijklmnopqrstuuJ8Pn6R6qVqzLqL7vR0Qe2b7r6P9q5Gm"
 
 
 def _normalized_url() -> str:
@@ -71,11 +72,11 @@ def workspace_and_users(db_session):
     workspace = WorkspaceModel(id=uuid.uuid4(), name="Empresa Demo", subdomain=f"demo-{uuid.uuid4().hex[:6]}")
     collaborator = UserModel(
         id=uuid.uuid4(), workspace_id=workspace.id, full_name="Colaborador Demo",
-        email=f"colab-{uuid.uuid4().hex[:6]}@demo.pe", password_hash="x", role=RoleName.COLLABORATOR, department="Ventas",
+        email=f"colab-{uuid.uuid4().hex[:6]}@demo.pe", password_hash=FAKE_HASH, role=RoleName.COLLABORATOR, department="Ventas",
     )
     analyst = UserModel(
         id=uuid.uuid4(), workspace_id=workspace.id, full_name="Analista Demo",
-        email=f"analista-{uuid.uuid4().hex[:6]}@demo.pe", password_hash="x", role=RoleName.ANALYST_L1, department="TI",
+        email=f"analista-{uuid.uuid4().hex[:6]}@demo.pe", password_hash=FAKE_HASH, role=RoleName.ANALYST_L1, department="TI",
     )
     db_session.add(workspace)
     db_session.flush()
