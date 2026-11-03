@@ -21,5 +21,5 @@ COPY . .
 
 EXPOSE 8000
 
-# Render inyecta la variable PORT; en local se usa 8000
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Aplica las migraciones pendientes y levanta la API (Render inyecta PORT; en local se usa 8000)
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

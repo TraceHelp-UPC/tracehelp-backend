@@ -41,11 +41,30 @@ cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
+## Migraciones (Alembic)
+
+Las migraciones se aplican solas al arrancar el contenedor (`alembic upgrade head`).
+Para crear una migración nueva después de cambiar modelos ORM:
+
+```bash
+docker compose exec api alembic revision --autogenerate -m "descripcion del cambio"
+docker compose exec api alembic upgrade head
+```
+
+Los modelos nuevos deben importarse en `app/core/orm_registry.py` para que Alembic los detecte.
+
 ## Pruebas
 
 ```bash
+# Solo pruebas unitarias
 pytest
+
+# Unitarias + integración contra PostgreSQL (crea y limpia la base tracehelp_test)
+docker compose up -d db
+TEST_DATABASE_URL=postgresql+psycopg://tracehelp:tracehelp@localhost:5432/tracehelp_test pytest
 ```
+
+En PowerShell: `$env:TEST_DATABASE_URL="postgresql+psycopg://tracehelp:tracehelp@localhost:5432/tracehelp_test"; pytest`
 
 ## Convenciones
 
