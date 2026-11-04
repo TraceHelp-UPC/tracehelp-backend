@@ -83,3 +83,33 @@ def workspace_and_users(db_session):
     db_session.add_all([collaborator, analyst])
     db_session.flush()
     return workspace, collaborator, analyst
+
+
+@pytest.fixture()
+def api_client(db_session):
+    """Cliente HTTP de la API que usa la sesión transaccional de la prueba."""
+    from fastapi.testclient import TestClient
+
+    from app.core.database import get_db
+    from app.main import app
+
+    def _override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = _override_get_db
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def auth_headers():
+    """Genera el encabezado Authorization para un UserModel guardado en la base de pruebas."""
+    from app.iam.infrastructure.persistence.user_repository import SqlAlchemyUserRepository
+    from app.iam.interfaces.rest.dependencies import get_token_provider
+
+    def _headers(db_session, user_model) -> dict:
+        user = SqlAlchemyUserRepository(db_session).find_by_id(user_model.id)
+        token, _ = get_token_provider().issue_access_token(user)
+        return {"Authorization": f"Bearer {token}"}
+
+    return _headers
