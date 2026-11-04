@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     # Aplicación
     app_name: str = "TraceHelp API"
     app_version: str = "0.1.0"
-    environment: str = "development"
+    environment: str = "development" 
     api_prefix: str = "/api/v1"
     cors_origins: list[str] = ["*"]
 
@@ -47,3 +47,5 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+ #
