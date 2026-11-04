@@ -39,7 +39,13 @@ def register_ticket(
     description: Annotated[str, Form(description="Descripción del problema")],
     impact_level: Annotated[ImpactLevel, Form(description="Impacto declarado: LOW, MEDIUM o HIGH")],
     affected_module: Annotated[str | None, Form(max_length=100, description="Sistema o módulo afectado")] = None,
-    screenshots: Annotated[list[UploadFile] | None, File(description="Capturas PNG o JPG de hasta 10 MB")] = None,
+    screenshots: Annotated[
+        list[UploadFile],
+        File(
+            description="Capturas PNG o JPG de hasta 10 MB",
+            json_schema_extra={"items": {"type": "string", "format": "binary"}},
+        ),
+    ] = [],
     current_user: CurrentUser = Depends(require_permission(Permission.TICKETS_CREATE)),
     service: TicketCommandService = Depends(get_ticket_command_service),
 ) -> TicketResponse:
