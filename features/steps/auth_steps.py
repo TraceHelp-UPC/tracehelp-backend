@@ -94,3 +94,22 @@ def step_token_permission(context, permission):
 def step_new_access_token(context):
     body = context.response.json()
     assert body["access_token"] and body["access_token"] != context.tokens["access_token"]
+
+
+ME_URL = "/api/v1/auth/me"
+
+
+@when("the user requests their profile with the access token")
+def step_me_with_token(context):
+    headers = {"Authorization": f"Bearer {context.tokens['access_token']}"}
+    context.response = context.client.get(ME_URL, headers=headers)
+
+
+@when("the user requests their profile without an access token")
+def step_me_without_token(context):
+    context.response = context.client.get(ME_URL)
+
+
+@then('the profile shows the role "{role}"')
+def step_profile_role(context, role):
+    assert context.response.json()["role"] == role

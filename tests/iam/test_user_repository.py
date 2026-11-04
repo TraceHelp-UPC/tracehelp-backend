@@ -58,3 +58,29 @@ def test_save_updates_existing_user(db_session):
     loaded = repo.find_by_id(user.id)
     assert loaded.role is RoleName.SPECIALIST_L2
     assert loaded.last_login_at is not None
+
+
+def test_me_returns_authenticated_user(api_client, db_session, auth_headers):
+    workspace = _workspace(db_session)
+    user = SqlAlchemyUserRepository(db_session).save(_register(workspace.id, email="me@empresa.pe"))
+
+    class _Model:
+        id = user.id
+
+    response = api_client.get("/api/v1/auth/me", headers=auth_headers(db_session, _Model))
+    assert response.status_code == 200
+    assert response.json()["email"] == "me@empresa.pe"
+    assert "triage:validate_hitl" in response.json()["permissions"]
+
+
+def test_me_rejects_deactivated_user(api_client, db_session, auth_headers):
+    repo = SqlAlchemyUserRepository(db_session)
+    user = repo.save(_register(_workspace(db_session).id, email="inactivo@empresa.pe"))
+
+    class _Model:
+        id = user.id
+
+    headers = auth_headers(db_session, _Model)
+    user.deactivate()
+    repo.save(user)
+    assert api_client.get("/api/v1/auth/me", headers=headers).status_code == 401

@@ -1,7 +1,15 @@
-"""Dependencias de autenticación y autorización para los endpoints protegidos de todos los módulos.
+"""Dependencias de autenticación y autorización (JWT + RBAC) para los endpoints protegidos de todos los módulos.
 
-Uso en un router:
+Uso en un endpoint que exige un permiso de la matriz RBAC:
     current_user: CurrentUser = Depends(require_permission(Permission.TICKETS_CREATE))
+
+Uso en un endpoint que solo exige estar autenticado:
+    current_user: CurrentUser = Depends(get_current_user)
+
+Para proteger todos los endpoints de un router con el mismo permiso:
+    router = APIRouter(dependencies=[Depends(require_permission(Permission.ANALYTICS_READ))])
+
+Respuestas: 401 si el token falta, es inválido, expiró o no es un access token; 403 si el rol no tiene el permiso.
 """
 import uuid
 from collections.abc import Callable
@@ -47,12 +55,17 @@ def get_current_user(
     )
 
 
-def require_permission(permission: Permission) -> Callable[..., CurrentUser]:
-    """Crea una dependencia que exige un permiso de la matriz RBAC (responde 403 si falta)."""
+def require_permission(*permissions: Permission) -> Callable[..., CurrentUser]:
+    """Crea una dependencia que exige uno o más permisos de la matriz RBAC (responde 403 si falta alguno)."""
+    if not permissions:
+        raise ValueError("require_permission necesita al menos un permiso.")
 
     def _dependency(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
-        if not user.can(permission):
-            raise HTTPException(status.HTTP_403_FORBIDDEN, f"Tu rol no tiene el permiso requerido: {permission.value}.")
+        missing = [p.value for p in permissions if not user.can(p)]
+        if missing:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, f"Tu rol no tiene el permiso requerido: {', '.join(missing)}."
+            )
         return user
 
     return _dependency

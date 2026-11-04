@@ -30,3 +30,7 @@ def get_authentication_service(
         hasher=BcryptPasswordHasher(),
         tokens=tokens,
     )
+
+
+def get_user_repository(db: Session = Depends(get_db)) -> SqlAlchemyUserRepository:
+    return SqlAlchemyUserRepository(db)

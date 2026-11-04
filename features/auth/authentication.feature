@@ -42,3 +42,13 @@ Feature: Corporate Authentication with JWT
     Given the user "karim.ramirez@empresa.pe" has signed in with password "Segura123"
     When the client requests a new access token using the access token
     Then the response status is 401
+
+  Scenario: Authenticated user retrieves their profile
+    Given the user "karim.ramirez@empresa.pe" has signed in with password "Segura123"
+    When the user requests their profile with the access token
+    Then the response status is 200
+    And the profile shows the role "ANALYST_L1"
+
+  Scenario: Profile request rejected without an access token
+    When the user requests their profile without an access token
+    Then the response status is 401

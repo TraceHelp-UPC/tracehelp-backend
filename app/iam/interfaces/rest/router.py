@@ -7,7 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.iam.application.authentication_service import AuthenticationService
 from app.iam.domain.exceptions import InactiveUserError, InvalidCredentialsError, InvalidTokenError
-from app.iam.interfaces.rest.dependencies import get_authentication_service
+from app.iam.interfaces.rest.auth_dependencies import CurrentUser, get_current_user
+from app.iam.interfaces.rest.dependencies import get_authentication_service, get_user_repository
+from app.iam.infrastructure.persistence.user_repository import SqlAlchemyUserRepository
 from app.iam.interfaces.rest.schemas import (
     AccessTokenResponse,
     AuthenticatedUser,
@@ -36,19 +38,11 @@ def login(body: LoginRequest, service: AuthenticationService = Depends(get_authe
     except InactiveUserError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, exc.detail) from exc
 
-    user = result.user
     return TokenResponse(
         access_token=result.tokens.access_token,
         refresh_token=result.tokens.refresh_token,
         expires_in=result.tokens.expires_in,
-        user=AuthenticatedUser(
-            id=user.id,
-            workspace_id=user.workspace_id,
-            full_name=user.full_name,
-            email=user.email.value,
-            role=user.role.value,
-            permissions=sorted(p.value for p in user.role_permission.permissions),
-        ),
+        user=AuthenticatedUser.from_domain(result.user),
     )
 
 
@@ -67,3 +61,20 @@ def refresh(
     except InvalidTokenError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, exc.detail, headers=_UNAUTHORIZED) from exc
     return AccessTokenResponse(access_token=access_token, expires_in=expires_in)
+
+
+@router.get(
+    "/auth/me",
+    response_model=AuthenticatedUser,
+    summary="Consultar el usuario autenticado",
+    responses={401: {"description": "Token ausente, inválido o usuario deshabilitado"}},
+)
+def me(
+    current_user: CurrentUser = Depends(get_current_user),
+    users: SqlAlchemyUserRepository = Depends(get_user_repository),
+) -> AuthenticatedUser:
+    """Devuelve los datos y permisos del usuario del token. Las aplicaciones Appsmith lo usan para restaurar la sesión."""
+    user = users.find_by_id(current_user.id)
+    if user is None or not user.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "El usuario ya no está habilitado.", headers=_UNAUTHORIZED)
+    return AuthenticatedUser.from_domain(user)

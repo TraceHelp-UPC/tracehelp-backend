@@ -3,6 +3,8 @@ import uuid
 
 from pydantic import BaseModel, Field
 
+from app.iam.domain.user import User
+
 
 class LoginRequest(BaseModel):
     email: str = Field(..., examples=["karim.ramirez@empresa.pe"])
@@ -16,6 +18,17 @@ class AuthenticatedUser(BaseModel):
     email: str
     role: str
     permissions: list[str]
+
+    @classmethod
+    def from_domain(cls, user: User) -> "AuthenticatedUser":
+        return cls(
+            id=user.id,
+            workspace_id=user.workspace_id,
+            full_name=user.full_name,
+            email=user.email.value,
+            role=user.role.value,
+            permissions=sorted(p.value for p in user.role_permission.permissions),
+        )
 
 
 class TokenResponse(BaseModel):

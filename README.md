@@ -72,6 +72,22 @@ docker compose exec -e TEST_DATABASE_URL=postgresql+psycopg://tracehelp:tracehel
 
 En PowerShell: `$env:TEST_DATABASE_URL="postgresql+psycopg://tracehelp:tracehelp@localhost:5432/tracehelp_test"; pytest`
 
+## Endpoints protegidos (JWT y RBAC)
+
+1. `POST /api/v1/auth/login` devuelve el `access_token`.
+2. Las demás peticiones envían `Authorization: Bearer <access_token>` (en Swagger: botón **Authorize**).
+3. Cada endpoint declara el permiso que exige con `require_permission(...)` de `app/iam/interfaces/rest/auth_dependencies.py`:
+
+```python
+current_user: CurrentUser = Depends(require_permission(Permission.TICKETS_MANAGE))
+```
+
+Respuestas: **401** sin token o con token inválido/expirado; **403** si el rol no tiene el permiso.
+La matriz de permisos por rol está en `app/iam/domain/permissions.py`.
+
+Usuarios de prueba: `docker compose exec api python -m app.scripts.seed_demo_data`
+(`colaborador@`, `analista@`, `especialista@` y `lider@demo.tracehelp.pe`, contraseña `TraceHelp2026`).
+
 ## Convenciones
 
 - Ramas: GitFlow (`feature/<ID>-<descripcion>` desde `develop`).
