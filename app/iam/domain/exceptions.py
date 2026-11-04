@@ -20,3 +20,11 @@ class InvalidRoleOperationError(DomainValidationError):
 
 class InactiveUserError(DomainError):
     """El usuario no está activo y no puede iniciar sesión (se traduce a HTTP 401/403)."""
+
+
+class InvalidCredentialsError(DomainError):
+    """Correo o contraseña incorrectos (se traduce a HTTP 401). El mensaje no revela cuál de los dos falló."""
+
+
+class InvalidTokenError(DomainError):
+    """Token ausente, mal formado, expirado o de tipo incorrecto (se traduce a HTTP 401)."""

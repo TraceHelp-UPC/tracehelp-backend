@@ -64,6 +64,12 @@ docker compose up -d db
 TEST_DATABASE_URL=postgresql+psycopg://tracehelp:tracehelp@localhost:5432/tracehelp_test pytest
 ```
 
+Pruebas BDD (Behave) con los escenarios Gherkin de `features/`:
+
+```bash
+docker compose exec -e TEST_DATABASE_URL=postgresql+psycopg://tracehelp:tracehelp@db:5432/tracehelp_test api behave
+```
+
 En PowerShell: `$env:TEST_DATABASE_URL="postgresql+psycopg://tracehelp:tracehelp@localhost:5432/tracehelp_test"; pytest`
 
 ## Convenciones
