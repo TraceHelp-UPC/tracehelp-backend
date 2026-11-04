@@ -8,9 +8,11 @@ from fastapi.responses import JSONResponse
 from app.analytics.interfaces.rest.router import router as analytics_router
 from app.core import database
 from app.core.config import get_settings
+from app.core.event_handlers import register_event_handlers
 from app.helpdesk.interfaces.rest.router import router as helpdesk_router
 from app.iam.interfaces.rest.router import router as iam_router
 from app.knowledge.interfaces.rest.router import router as knowledge_router
+from app.shared.infrastructure.event_bus import event_bus
 from app.smart_triage.interfaces.rest.router import router as smart_triage_router
 
 settings = get_settings()
@@ -30,6 +32,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    register_event_handlers(event_bus)
 
     for router in (iam_router, helpdesk_router, knowledge_router, smart_triage_router, analytics_router):
         app.include_router(router, prefix=settings.api_prefix)

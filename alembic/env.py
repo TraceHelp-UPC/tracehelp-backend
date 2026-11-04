@@ -10,7 +10,7 @@ from app.core.orm_registry import metadata
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Si no se pasó una URL explícita (por ejemplo, desde las pruebas), se usa DATABASE_URL del entorno
 if not config.get_main_option("sqlalchemy.url"):
