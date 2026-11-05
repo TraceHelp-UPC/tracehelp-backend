@@ -4,13 +4,15 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from app.helpdesk.domain.enums import ImpactLevel, SupportTier, TicketPriority, TicketStatus
-from app.helpdesk.domain.events import TicketRegistered
+from app.helpdesk.domain import state_machine
+from app.helpdesk.domain.events import TicketRegistered, TicketStatusChanged
 from app.helpdesk.domain.exceptions import InvalidTicketDataError
 from app.helpdesk.domain.value_objects import VisualEvidence
 from app.shared.domain.aggregate_root import AggregateRoot
 
 MAX_TITLE_LENGTH = 200
 MAX_EVIDENCES = 5
+MAX_REASON_LENGTH = 500
 
 # Prioridad inicial según el impacto declarado; el triaje (US27) puede ajustarla después
 PRIORITY_BY_IMPACT = {
@@ -161,3 +163,53 @@ class Ticket(AggregateRoot):
         self.comments.append(comment)
         self.updated_at = _now()
         return comment
+
+    def change_status(
+        self,
+        target: TicketStatus,
+        *,
+        changed_by: uuid.UUID | None = None,
+        reason: str | None = None,
+        assignee_id: uuid.UUID | None = None,
+    ) -> None:
+        """Cambia el estado respetando la máquina de estados (TS04) y emite TicketStatusChanged.
+
+        changed_by es None cuando el cambio lo hace el sistema (por ejemplo, el triaje automático).
+        assignee_id solo se usa al pasar a ASSIGNED_L1; si no se indica, se conserva el analista ya asignado.
+        """
+        state_machine.ensure_transition(self.status, target)
+        reason = (reason or "").strip() or None
+        if reason and len(reason) > MAX_REASON_LENGTH:
+            raise InvalidTicketDataError(f"El motivo no puede superar los {MAX_REASON_LENGTH} caracteres.")
+
+        if target is TicketStatus.ASSIGNED_L1:
+            if assignee_id is not None:
+                self.assigned_analyst_id = assignee_id
+            elif self.assigned_analyst_id is None:
+                raise InvalidTicketDataError("Para pasar el ticket a ASSIGNED_L1 se necesita un analista asignado.")
+        elif target is TicketStatus.PENDING_ASSIGNMENT:
+            self.assigned_analyst_id = None  # vuelve a la cola sin responsable
+
+        now = _now()
+        if target is TicketStatus.RESOLVED:
+            self.resolved_at = now
+        elif target is TicketStatus.CLOSED:
+            self.closed_at = now
+        elif target is TicketStatus.REOPENED:
+            self.resolved_at = None
+
+        previous = self.status
+        self.status = target
+        self.current_tier = state_machine.TIER_BY_STATUS.get(target, self.current_tier)
+        self.updated_at = now
+        self.record_event(
+            TicketStatusChanged(
+                ticket_id=self.id,
+                workspace_id=self.workspace_id,
+                reporter_id=self.reporter_id,
+                previous_status=previous.value,
+                new_status=target.value,
+                changed_by=changed_by,
+                reason=reason,
+            )
+        )
