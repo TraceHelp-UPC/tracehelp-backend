@@ -17,11 +17,13 @@ from app.helpdesk.application.ticket_command_service import (
     TicketCommandService,
     UploadedFile,
 )
+from app.helpdesk.application.ticket_query_service import TicketQueryService
 from app.helpdesk.domain.enums import ImpactLevel
 from app.helpdesk.domain.ticket import MAX_EVIDENCES
-from app.helpdesk.interfaces.rest.dependencies import get_ticket_command_service
+from app.helpdesk.interfaces.rest.dependencies import get_ticket_command_service, get_ticket_query_service
 from app.helpdesk.domain.exceptions import (
     InvalidTicketStateTransitionError,
+    TicketAccessForbiddenError,
     TicketNotFoundError,
     TicketStatusChangeForbiddenError,
 )
@@ -208,3 +210,64 @@ def update_analyst_availability(
         user_id=user.id,
         availability_status=user.availability_status.value,
     )
+
+
+@router.get(
+    "/tickets/my-history",
+    response_model=list[TicketResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Consultar historial de incidentes propios del colaborador",
+    responses={
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "El rol no tiene permiso para consultar tickets"},
+    },
+)
+def get_my_tickets_history(
+    current_user: CurrentUser = Depends(require_permission(Permission.TICKETS_READ_OWN)),
+    query_service: TicketQueryService = Depends(get_ticket_query_service),
+) -> list[TicketResponse]:
+    """Retorna los tickets creados por el colaborador autenticado ordenados descendentemente (US13, T50, T51)."""
+    tickets = query_service.get_reporter_history(
+        workspace_id=current_user.workspace_id,
+        reporter_id=current_user.id,
+    )
+    can_manage = current_user.can(Permission.TICKETS_MANAGE)
+    return [TicketResponse.from_domain(t, include_internal_notes=can_manage) for t in tickets]
+
+
+@router.get(
+    "/tickets/{ticket_id}",
+    response_model=TicketResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Consultar detalle de un incidente",
+    responses={
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "No tiene permiso para ver incidentes de otros colaboradores"},
+        404: {"description": "El incidente solicitado no existe"},
+    },
+)
+def get_ticket_details(
+    ticket_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    query_service: TicketQueryService = Depends(get_ticket_query_service),
+) -> TicketResponse:
+    """Retorna el detalle completo de un ticket con sus evidencias, historial y respuestas (US13, T50, T51).
+
+    Un colaborador solo puede ver sus propios incidentes (403 Forbidden ante tickets de terceros).
+    """
+    can_manage = current_user.can(Permission.TICKETS_MANAGE)
+    try:
+        ticket = query_service.get_ticket_details(
+            workspace_id=current_user.workspace_id,
+            ticket_id=ticket_id,
+            requester_id=current_user.id,
+            can_manage=can_manage,
+        )
+    except TicketNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.detail) from exc
+    except TicketAccessForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.detail) from exc
+    except DomainValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.detail) from exc
+
+    return TicketResponse.from_domain(ticket, include_internal_notes=can_manage)

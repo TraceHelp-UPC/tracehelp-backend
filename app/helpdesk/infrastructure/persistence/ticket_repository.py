@@ -79,11 +79,31 @@ class SqlAlchemyTicketRepository(ITicketRepository):
         stmt = (
             select(TicketModel)
             .where(TicketModel.id == ticket_id)
-            .options(selectinload(TicketModel.evidences).undefer(TicketEvidenceModel.file_data))
+            .options(
+                selectinload(TicketModel.evidences).undefer(TicketEvidenceModel.file_data),
+                selectinload(TicketModel.comments),
+            )
             .execution_options(populate_existing=True)
         )
         model = self._session.scalars(stmt).one_or_none()
         return self._to_domain(model) if model else None
+
+    def find_by_reporter(self, reporter_id: uuid.UUID, workspace_id: uuid.UUID) -> list[Ticket]:
+        stmt = (
+            select(TicketModel)
+            .where(
+                TicketModel.reporter_id == reporter_id,
+                TicketModel.workspace_id == workspace_id,
+            )
+            .options(
+                selectinload(TicketModel.evidences).undefer(TicketEvidenceModel.file_data),
+                selectinload(TicketModel.comments),
+            )
+            .order_by(TicketModel.created_at.desc())
+            .execution_options(populate_existing=True)
+        )
+        models = self._session.scalars(stmt).all()
+        return [self._to_domain(m) for m in models]
 
     def _to_domain(self, model: TicketModel) -> Ticket:
         evidences = [

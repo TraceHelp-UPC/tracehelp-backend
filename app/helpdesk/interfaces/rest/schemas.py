@@ -15,6 +15,15 @@ class EvidenceResponse(BaseModel):
     size_bytes: int
 
 
+class CommentResponse(BaseModel):
+    id: uuid.UUID
+    author_id: uuid.UUID
+    content: str
+    is_ai_generated: bool
+    is_internal_note: bool
+    created_at: datetime
+
+
 class TicketResponse(BaseModel):
     id: uuid.UUID
     code: str
@@ -32,9 +41,10 @@ class TicketResponse(BaseModel):
     resolved_at: datetime | None
     closed_at: datetime | None
     evidences: list[EvidenceResponse]
+    comments: list[CommentResponse] = []
 
     @classmethod
-    def from_domain(cls, ticket: Ticket) -> "TicketResponse":
+    def from_domain(cls, ticket: Ticket, include_internal_notes: bool = True) -> "TicketResponse":
         return cls(
             id=ticket.id,
             code=ticket.code,
@@ -54,6 +64,18 @@ class TicketResponse(BaseModel):
             evidences=[
                 EvidenceResponse(id=e.id, file_name=e.file_name, mime_type=e.mime_type, size_bytes=e.size_bytes)
                 for e in ticket.evidences
+            ],
+            comments=[
+                CommentResponse(
+                    id=c.id,
+                    author_id=c.author_id,
+                    content=c.content,
+                    is_ai_generated=c.is_ai_generated,
+                    is_internal_note=c.is_internal_note,
+                    created_at=c.created_at,
+                )
+                for c in ticket.comments
+                if include_internal_notes or not c.is_internal_note
             ],
         )
 
