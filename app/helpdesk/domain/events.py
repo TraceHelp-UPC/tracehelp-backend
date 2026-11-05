@@ -13,3 +13,16 @@ class TicketRegistered(DomainEvent):
     workspace_id: uuid.UUID
     reporter_id: uuid.UUID
     has_evidence: bool
+
+
+@dataclass(frozen=True, kw_only=True)
+class TicketStatusChanged(DomainEvent):
+    """Se emite en cada cambio de estado válido. Lo usarán las notificaciones (US19) y la auditoría."""
+
+    ticket_id: uuid.UUID
+    workspace_id: uuid.UUID
+    reporter_id: uuid.UUID
+    previous_status: str
+    new_status: str
+    changed_by: uuid.UUID | None
+    reason: str | None = None

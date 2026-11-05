@@ -3,11 +3,14 @@
 Tickets, colas, estados, escalamiento y calificaciones.
 Las rutas se montan bajo /api/v1 en app/main.py.
 """
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
+from app.helpdesk.application.status_change_policy import Actor
 from app.helpdesk.application.ticket_command_service import (
+    ChangeTicketStatusCommand,
     RegisterTicketCommand,
     TicketCommandService,
     UploadedFile,
@@ -15,9 +18,14 @@ from app.helpdesk.application.ticket_command_service import (
 from app.helpdesk.domain.enums import ImpactLevel
 from app.helpdesk.domain.ticket import MAX_EVIDENCES
 from app.helpdesk.interfaces.rest.dependencies import get_ticket_command_service
-from app.helpdesk.interfaces.rest.schemas import TicketResponse
+from app.helpdesk.domain.exceptions import (
+    InvalidTicketStateTransitionError,
+    TicketNotFoundError,
+    TicketStatusChangeForbiddenError,
+)
+from app.helpdesk.interfaces.rest.schemas import ChangeTicketStatusRequest, TicketResponse
 from app.iam.domain.permissions import Permission
-from app.iam.interfaces.rest.auth_dependencies import CurrentUser, require_permission
+from app.iam.interfaces.rest.auth_dependencies import CurrentUser, get_current_user, require_permission
 from app.shared.domain.exceptions import DomainValidationError
 
 router = APIRouter(tags=["Helpdesk"])
@@ -69,6 +77,52 @@ def register_ticket(
     )
     try:
         ticket = service.register(command)
+    except DomainValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.detail) from exc
+    return TicketResponse.from_domain(ticket)
+
+
+@router.patch(
+    "/tickets/{ticket_id}/status",
+    response_model=TicketResponse,
+    summary="Cambiar el estado de un ticket",
+    responses={
+        400: {"description": "Datos no válidos (por ejemplo, motivo demasiado largo)"},
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "El usuario no puede hacer este cambio de estado"},
+        404: {"description": "El ticket no existe o no es visible para el usuario"},
+        422: {"description": "El cambio no está permitido por la máquina de estados"},
+    },
+)
+def change_ticket_status(
+    ticket_id: uuid.UUID,
+    body: ChangeTicketStatusRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: TicketCommandService = Depends(get_ticket_command_service),
+) -> TicketResponse:
+    """Mueve el ticket a otro estado según la máquina de estados del Capítulo V (TS04).
+
+    Transiciones permitidas y quién puede hacerlas:
+    - OPEN → PENDING_ASSIGNMENT: soporte (tickets:manage). OPEN → SELF_SERVICE_PROPOSED la hace el triaje automático.
+    - SELF_SERVICE_PROPOSED → RESOLVED / PENDING_ASSIGNMENT: el colaborador que reportó.
+    - PENDING_ASSIGNMENT → ASSIGNED_L1: soporte (el ticket queda asignado a quien lo toma).
+    - ASSIGNED_L1 → PENDING_ASSIGNMENT / RESOLVED: soporte. ASSIGNED_L1 → ESCALATED_L2: tickets:escalate.
+    - ESCALATED_L2 → ASSIGNED_L1 / RESOLVED: tickets:resolve_escalated.
+    - RESOLVED → CLOSED / REOPENED: el colaborador que reportó.
+    - REOPENED → ASSIGNED_L1: soporte.
+    """
+    actor = Actor(id=current_user.id, workspace_id=current_user.workspace_id, permissions=current_user.permissions)
+    command = ChangeTicketStatusCommand(
+        ticket_id=ticket_id, actor=actor, target_status=body.status, reason=body.reason
+    )
+    try:
+        ticket = service.change_status(command)
+    except TicketNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.detail) from exc
+    except InvalidTicketStateTransitionError as exc:
+        raise HTTPException(422, exc.detail) from exc
+    except TicketStatusChangeForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.detail) from exc
     except DomainValidationError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.detail) from exc
     return TicketResponse.from_domain(ticket)

@@ -3,7 +3,7 @@ from enum import StrEnum
 
 
 class TicketStatus(StrEnum):
-    """Estados del ticket según la máquina de estados del Capítulo V (las transiciones se implementan en la T15)."""
+    """Estados del ticket. Las transiciones válidas están en domain/state_machine.py (T15)."""
 
     OPEN = "OPEN"
     SELF_SERVICE_PROPOSED = "SELF_SERVICE_PROPOSED"
