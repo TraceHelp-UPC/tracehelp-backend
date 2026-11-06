@@ -1,5 +1,7 @@
 """Punto de entrada del backend monolítico de TraceHelp."""
+import logging
 import shutil
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +20,23 @@ from app.shared.interfaces.rest.problem_details import ProblemDetail
 from app.smart_triage.interfaces.rest.router import router as smart_triage_router
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Al arrancar, reanuda las ingestas de manuales que quedaron a medias (T23)."""
+    worker = None
+    if settings.ingestion_worker_enabled:
+        from app.knowledge.infrastructure.ingestion_worker import ingestion_worker as worker
+
+        try:
+            worker.resume_pending()
+        except Exception:  # noqa: BLE001 - si la base no responde, la API arranca igual
+            logger.exception("No se pudieron reanudar las ingestas pendientes")
+    yield
+    if worker is not None:
+        worker.shutdown()
 
 
 def create_app() -> FastAPI:
@@ -25,6 +44,7 @@ def create_app() -> FastAPI:
         title=settings.app_name,
         version=settings.app_version,
         description="API REST de TraceHelp: triaje inteligente de incidentes de TI con RAG y supervisión humana.",
+        lifespan=lifespan,
     )
 
     app.add_middleware(
