@@ -9,3 +9,5 @@ python-multipart>=0.0.9
 bcrypt>=4.2
 PyJWT>=2.9
 pillow>=10.4
+# OCR de capturas (T26); el binario de Tesseract ya está en la imagen Docker
+pytesseract>=0.3.13
