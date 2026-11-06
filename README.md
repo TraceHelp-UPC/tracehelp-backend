@@ -127,3 +127,12 @@ documentos que quedaron `PENDING` o `PROCESSING`. En las pruebas el worker está
 Nota sobre migraciones con pgvector: `alembic revision --autogenerate` genera la columna como
 `pgvector.sqlalchemy.vector.VECTOR(dim=768)` sin importar el módulo; cámbiala por `Vector(768)` con
 `from pgvector.sqlalchemy import Vector` (ver `alembic/versions/20261106_0003_knowledge_chunks.py`).
+## Formato de errores (RFC 7807)
+
+Todos los errores responden `application/problem+json` con `type`, `title`, `status`, `detail` e `instance`
+(los de validación agregan `errors` por campo). `detail` siempre es texto, porque Appsmith lo muestra con
+`showAlert(Query.data?.detail)`.
+
+Las excepciones de dominio no necesitan traducirse en el router: `ResourceNotFoundError` responde 404,
+`DomainValidationError` 400 y cualquier otro `DomainError` 422. Si una excepción necesita otro código
+(401, 403, 409...), se agrega en `app/core/error_handlers.py`.
