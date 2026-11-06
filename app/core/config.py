@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = 768
 
+    # Anonimización PII (T27): clave del sello HMAC y modelo de spaCy (vacío = solo expresiones regulares)
+    pii_audit_secret: str = "dev-only-pii-secret-cambiar-en-el-env-0123456789"
+    pii_spacy_model: str = "es_core_news_sm"
+
     # Notificaciones
     resend_api_key: str = ""
 
