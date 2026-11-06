@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.helpdesk.domain.enums import TicketStatus
+from app.helpdesk.domain.enums import TicketPriority, TicketStatus
 from app.helpdesk.domain.ticket import MAX_REASON_LENGTH, Ticket
 
 
@@ -25,6 +25,9 @@ class TicketResponse(BaseModel):
     status: str
     priority: str
     current_tier: str
+    category: str
+    suggested_category: str | None = None
+    suggested_priority: str | None = None
     reporter_id: uuid.UUID
     assigned_analyst_id: uuid.UUID | None
     created_at: datetime
@@ -45,6 +48,9 @@ class TicketResponse(BaseModel):
             status=ticket.status.value,
             priority=ticket.priority.value,
             current_tier=ticket.current_tier.value,
+            category=ticket.category,
+            suggested_category=ticket.suggested_category,
+            suggested_priority=ticket.suggested_priority.value if ticket.suggested_priority else None,
             reporter_id=ticket.reporter_id,
             assigned_analyst_id=ticket.assigned_analyst_id,
             created_at=ticket.created_at,
@@ -63,3 +69,8 @@ class ChangeTicketStatusRequest(BaseModel):
     reason: str | None = Field(
         None, max_length=MAX_REASON_LENGTH, description="Motivo del cambio (opcional)", examples=["Tomo el ticket"]
     )
+
+
+class UpdateTicketClassificationRequest(BaseModel):
+    category: str = Field(..., max_length=100, description="Nueva categoría del catálogo", examples=["Conectividad y Red"])
+    priority: TicketPriority = Field(..., description="Nueva prioridad del ticket", examples=["HIGH"])

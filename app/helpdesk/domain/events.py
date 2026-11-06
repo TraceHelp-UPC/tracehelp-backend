@@ -26,3 +26,16 @@ class TicketStatusChanged(DomainEvent):
     new_status: str
     changed_by: uuid.UUID | None
     reason: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class TicketClassificationOverridden(DomainEvent):
+    """Se emite cuando un analista corrige la categoría o prioridad sugerida en el triaje (US27, T42)."""
+
+    ticket_id: uuid.UUID
+    workspace_id: uuid.UUID
+    analyst_id: uuid.UUID
+    suggested_category: str
+    suggested_priority: str
+    new_category: str
+    new_priority: str

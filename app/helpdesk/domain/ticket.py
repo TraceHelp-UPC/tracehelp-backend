@@ -5,10 +5,15 @@ from datetime import UTC, datetime
 
 from app.helpdesk.domain.enums import ImpactLevel, SupportTier, TicketPriority, TicketStatus
 from app.helpdesk.domain import state_machine
-from app.helpdesk.domain.events import TicketRegistered, TicketStatusChanged
+from app.helpdesk.domain.events import (
+    TicketClassificationOverridden,
+    TicketRegistered,
+    TicketStatusChanged,
+)
 from app.helpdesk.domain.exceptions import InvalidTicketDataError
 from app.helpdesk.domain.value_objects import VisualEvidence
 from app.shared.domain.aggregate_root import AggregateRoot
+from app.smart_triage.domain.classification import DEFAULT_CATEGORY, VALID_CATEGORIES, TriageClassification
 
 MAX_TITLE_LENGTH = 200
 MAX_EVIDENCES = 5
@@ -58,6 +63,9 @@ class Ticket(AggregateRoot):
         status: TicketStatus,
         priority: TicketPriority,
         current_tier: SupportTier,
+        category: str = DEFAULT_CATEGORY,
+        suggested_category: str | None = None,
+        suggested_priority: TicketPriority | None = None,
         number: int | None = None,
         assigned_analyst_id: uuid.UUID | None = None,
         evidences: list[VisualEvidence] | None = None,
@@ -78,6 +86,9 @@ class Ticket(AggregateRoot):
         self.status = status
         self.priority = priority
         self.current_tier = current_tier
+        self.category = category
+        self.suggested_category = suggested_category or category
+        self.suggested_priority = suggested_priority or priority
         self.number = number
         self.assigned_analyst_id = assigned_analyst_id
         self.evidences = list(evidences or [])
@@ -100,7 +111,7 @@ class Ticket(AggregateRoot):
         affected_module: str | None = None,
         evidences: list[VisualEvidence] | None = None,
     ) -> "Ticket":
-        """Registra un nuevo incidente (US10) y emite TicketRegistered."""
+        """Registra un nuevo incidente (US10, US27) y emite TicketRegistered."""
         title = (title or "").strip()
         description = (description or "").strip()
         if not title:
@@ -113,17 +124,28 @@ class Ticket(AggregateRoot):
         if len(evidences) > MAX_EVIDENCES:
             raise InvalidTicketDataError(f"Se permiten como máximo {MAX_EVIDENCES} capturas por ticket.")
 
+        cleaned_module = (affected_module or "").strip() or None
+        classification = TriageClassification.infer_from_incident(
+            title=title,
+            description=description,
+            impact_level=impact_level,
+            affected_module=cleaned_module,
+        )
+
         ticket = cls(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
             reporter_id=reporter_id,
             title=title,
             description=description,
-            affected_module=(affected_module or "").strip() or None,
+            affected_module=cleaned_module,
             impact_level=impact_level,
             status=TicketStatus.OPEN,
-            priority=PRIORITY_BY_IMPACT[impact_level],
+            priority=classification.priority,
             current_tier=SupportTier.SELF_SERVICE,
+            category=classification.category,
+            suggested_category=classification.category,
+            suggested_priority=classification.priority,
             evidences=evidences,
         )
         ticket.record_event(
@@ -211,5 +233,52 @@ class Ticket(AggregateRoot):
                 new_status=target.value,
                 changed_by=changed_by,
                 reason=reason,
+            )
+        )
+
+    def apply_triage_classification(self, classification: TriageClassification) -> None:
+        """Aplica la clasificación estructurada devuelta por el triaje automático (US27, T41)."""
+        self.category = classification.category
+        self.priority = classification.priority
+        self.suggested_category = classification.category
+        self.suggested_priority = classification.priority
+        self.updated_at = _now()
+
+    def override_classification(
+        self,
+        *,
+        category: str,
+        priority: TicketPriority,
+        analyst_id: uuid.UUID,
+    ) -> None:
+        """Permite al analista corregir categoría y prioridad conservando la clasificación sugerida (US27, T42)."""
+        cleaned = (category or "").strip()
+        if not cleaned or cleaned not in VALID_CATEGORIES:
+            raise InvalidTicketDataError(
+                f"La categoría '{cleaned}' no pertenece al catálogo permitido: {', '.join(sorted(VALID_CATEGORIES))}."
+            )
+        if not isinstance(priority, TicketPriority):
+            try:
+                priority = TicketPriority(str(priority).upper())
+            except ValueError as exc:
+                raise InvalidTicketDataError(f"Prioridad inválida: {priority}.") from exc
+
+        if self.suggested_category is None:
+            self.suggested_category = self.category
+        if self.suggested_priority is None:
+            self.suggested_priority = self.priority
+
+        self.category = cleaned
+        self.priority = priority
+        self.updated_at = _now()
+        self.record_event(
+            TicketClassificationOverridden(
+                ticket_id=self.id,
+                workspace_id=self.workspace_id,
+                analyst_id=analyst_id,
+                suggested_category=self.suggested_category,
+                suggested_priority=self.suggested_priority.value,
+                new_category=self.category,
+                new_priority=self.priority.value,
             )
         )
