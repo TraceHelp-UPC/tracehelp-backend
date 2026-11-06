@@ -20,3 +20,7 @@ class TicketNotFoundError(ResourceNotFoundError):
 
 class TicketStatusChangeForbiddenError(DomainError):
     """El usuario no tiene permiso para hacer ese cambio de estado (HTTP 403)."""
+
+
+class TicketAccessForbiddenError(DomainError):
+    """El colaborador intentó acceder a un ticket ajeno o sin permisos (US13, HTTP 403)."""

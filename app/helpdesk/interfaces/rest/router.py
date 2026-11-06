@@ -7,7 +7,9 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from sqlalchemy.orm import Session
 
+from app.core.database import get_db
 from app.helpdesk.application.status_change_policy import Actor
 from app.helpdesk.application.ticket_command_service import (
     ChangeTicketStatusCommand,
@@ -15,16 +17,25 @@ from app.helpdesk.application.ticket_command_service import (
     TicketCommandService,
     UploadedFile,
 )
+from app.helpdesk.application.ticket_query_service import TicketQueryService
 from app.helpdesk.domain.enums import ImpactLevel
 from app.helpdesk.domain.ticket import MAX_EVIDENCES
-from app.helpdesk.interfaces.rest.dependencies import get_ticket_command_service
+from app.helpdesk.interfaces.rest.dependencies import get_ticket_command_service, get_ticket_query_service
 from app.helpdesk.domain.exceptions import (
     InvalidTicketStateTransitionError,
+    TicketAccessForbiddenError,
     TicketNotFoundError,
     TicketStatusChangeForbiddenError,
 )
-from app.helpdesk.interfaces.rest.schemas import ChangeTicketStatusRequest, TicketResponse
+from app.helpdesk.interfaces.rest.schemas import (
+    AnalystAvailabilityRequest,
+    AnalystAvailabilityResponse,
+    ChangeTicketStatusRequest,
+    TicketResponse,
+)
+from app.iam.domain.enums import AvailabilityStatus
 from app.iam.domain.permissions import Permission
+from app.iam.infrastructure.persistence.user_repository import SqlAlchemyUserRepository
 from app.iam.interfaces.rest.auth_dependencies import CurrentUser, get_current_user, require_permission
 from app.shared.domain.exceptions import DomainValidationError
 
@@ -126,3 +137,137 @@ def change_ticket_status(
     except DomainValidationError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.detail) from exc
     return TicketResponse.from_domain(ticket)
+
+
+@router.post(
+    "/tickets/{ticket_id}/assign",
+    response_model=TicketResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Tomar o asignar un incidente al analista actual",
+    responses={
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "El rol no tiene permiso para gestionar tickets"},
+        404: {"description": "El incidente no existe"},
+        422: {"description": "Transición no permitida por la máquina de estados"},
+    },
+)
+def assign_ticket(
+    ticket_id: uuid.UUID,
+    current_user: CurrentUser = Depends(require_permission(Permission.TICKETS_MANAGE)),
+    service: TicketCommandService = Depends(get_ticket_command_service),
+) -> TicketResponse:
+    """Asigna el ticket al analista autenticado y actualiza su estado a ASSIGNED_L1 (US24, T47)."""
+    actor = Actor(id=current_user.id, workspace_id=current_user.workspace_id, permissions=current_user.permissions)
+    try:
+        ticket = service.assign_ticket(ticket_id=ticket_id, actor=actor)
+    except TicketNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.detail) from exc
+    except InvalidTicketStateTransitionError as exc:
+        raise HTTPException(422, exc.detail) from exc
+    except TicketStatusChangeForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.detail) from exc
+    except DomainValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.detail) from exc
+
+    return TicketResponse.from_domain(ticket)
+
+
+@router.patch(
+    "/analysts/me/availability",
+    response_model=AnalystAvailabilityResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Actualizar estado de disponibilidad del analista",
+    responses={
+        400: {"description": "Estado de disponibilidad inválido"},
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "No tiene permisos de analista"},
+    },
+)
+def update_analyst_availability(
+    payload: AnalystAvailabilityRequest,
+    current_user: CurrentUser = Depends(require_permission(Permission.TICKETS_MANAGE)),
+    session: Session = Depends(get_db),
+) -> AnalystAvailabilityResponse:
+    """Modifica la disponibilidad operativa del analista (AVAILABLE o UNAVAILABLE) (US24, T47)."""
+    try:
+        status_enum = AvailabilityStatus(payload.availability)
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"El estado '{payload.availability}' no es válido. Use AVAILABLE o UNAVAILABLE.",
+        ) from exc
+
+    user_repo = SqlAlchemyUserRepository(session)
+    user = user_repo.find_by_id(current_user.id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analista no encontrado.")
+
+    user.set_availability(status_enum)
+    user_repo.save(user)
+    session.commit()
+
+    return AnalystAvailabilityResponse(
+        user_id=user.id,
+        availability_status=user.availability_status.value,
+    )
+
+
+@router.get(
+    "/tickets/my-history",
+    response_model=list[TicketResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Consultar historial de incidentes propios del colaborador",
+    responses={
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "El rol no tiene permiso para consultar tickets"},
+    },
+)
+def get_my_tickets_history(
+    current_user: CurrentUser = Depends(require_permission(Permission.TICKETS_READ_OWN)),
+    query_service: TicketQueryService = Depends(get_ticket_query_service),
+) -> list[TicketResponse]:
+    """Retorna los tickets creados por el colaborador autenticado ordenados descendentemente (US13, T50, T51)."""
+    tickets = query_service.get_reporter_history(
+        workspace_id=current_user.workspace_id,
+        reporter_id=current_user.id,
+    )
+    can_manage = current_user.can(Permission.TICKETS_MANAGE)
+    return [TicketResponse.from_domain(t, include_internal_notes=can_manage) for t in tickets]
+
+
+@router.get(
+    "/tickets/{ticket_id}",
+    response_model=TicketResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Consultar detalle de un incidente",
+    responses={
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "No tiene permiso para ver incidentes de otros colaboradores"},
+        404: {"description": "El incidente solicitado no existe"},
+    },
+)
+def get_ticket_details(
+    ticket_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    query_service: TicketQueryService = Depends(get_ticket_query_service),
+) -> TicketResponse:
+    """Retorna el detalle completo de un ticket con sus evidencias, historial y respuestas (US13, T50, T51).
+
+    Un colaborador solo puede ver sus propios incidentes (403 Forbidden ante tickets de terceros).
+    """
+    can_manage = current_user.can(Permission.TICKETS_MANAGE)
+    try:
+        ticket = query_service.get_ticket_details(
+            workspace_id=current_user.workspace_id,
+            ticket_id=ticket_id,
+            requester_id=current_user.id,
+            can_manage=can_manage,
+        )
+    except TicketNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.detail) from exc
+    except TicketAccessForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.detail) from exc
+    except DomainValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.detail) from exc
+
+    return TicketResponse.from_domain(ticket, include_internal_notes=can_manage)
