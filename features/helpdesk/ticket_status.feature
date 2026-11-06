@@ -20,6 +20,7 @@ Feature: Ticket lifecycle state machine
     Then the response status is 200
     And the response shows the ticket in status "RESOLVED"
     And the response shows the resolution date
+    And the status history records the transition from "ASSIGNED_L1" to "RESOLVED" by the "ANALYST_L1"
 
   Scenario: Updating a ticket that does not exist
     When the "ANALYST_L1" changes the status of a nonexistent ticket to "PENDING_ASSIGNMENT"

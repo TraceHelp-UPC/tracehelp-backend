@@ -8,9 +8,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload, undefer
 
 from app.helpdesk.domain.repositories import ITicketRepository
-from app.helpdesk.domain.ticket import Ticket, TicketComment
+from app.helpdesk.domain.ticket import Ticket, TicketComment, TicketStatusChange
 from app.helpdesk.domain.value_objects import VisualEvidence
-from app.helpdesk.infrastructure.persistence.models import TicketCommentModel, TicketEvidenceModel, TicketModel
+from app.helpdesk.infrastructure.persistence.models import (
+    TicketCommentModel,
+    TicketEvidenceModel,
+    TicketModel,
+    TicketStatusHistoryModel,
+)
 
 _SCALAR_FIELDS = (
     "workspace_id",
@@ -71,6 +76,20 @@ class SqlAlchemyTicketRepository(ITicketRepository):
                     )
                 )
 
+        existing_history = {h.id for h in model.status_history}
+        for change in ticket.status_history:
+            if change.id not in existing_history:
+                model.status_history.append(
+                    TicketStatusHistoryModel(
+                        id=change.id,
+                        changed_by_id=change.changed_by,
+                        previous_status=change.previous_status,
+                        new_status=change.new_status,
+                        reason=change.reason,
+                        changed_at=change.changed_at,
+                    )
+                )
+
         self._session.flush()
         ticket.number = model.ticket_number
         return ticket
@@ -107,10 +126,22 @@ class SqlAlchemyTicketRepository(ITicketRepository):
             )
             for c in model.comments
         ]
+        status_history = [
+            TicketStatusChange(
+                id=h.id,
+                previous_status=h.previous_status,
+                new_status=h.new_status,
+                changed_by=h.changed_by_id,
+                reason=h.reason,
+                changed_at=h.changed_at,
+            )
+            for h in model.status_history
+        ]
         return Ticket(
             id=model.id,
             number=model.ticket_number,
             evidences=evidences,
             comments=comments,
+            status_history=status_history,
             **{name: getattr(model, name) for name in _SCALAR_FIELDS},
         )

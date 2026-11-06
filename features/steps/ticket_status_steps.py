@@ -128,3 +128,14 @@ def step_response_ticket_status(context, status):
 def step_response_resolved_at(context):
     assert context.response.json()["resolved_at"] is not None
 
+
+@then('the status history records the transition from "{previous}" to "{target}" by the "{role}"')
+def step_status_history_recorded(context, previous, target, role):
+    history = context.response.json().get("status_history", [])
+    assert len(history) >= 1, f"Se esperaba historial de estados y se obtuvo: {history}"
+    last = history[-1]
+    assert last["previous_status"] == previous
+    assert last["new_status"] == target
+    assert last["changed_by"] == str(context.users[role].id)
+    assert last["changed_at"] is not None
+

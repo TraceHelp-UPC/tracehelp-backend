@@ -121,3 +121,16 @@ def test_resolve_close_and_reopen_update_timestamps():
 def test_reason_longer_than_500_characters_is_rejected():
     with pytest.raises(InvalidTicketDataError):
         _ticket(S.OPEN).change_status(S.PENDING_ASSIGNMENT, reason="x" * 501)
+
+
+def test_change_status_appends_entry_to_status_history():
+    ticket = _ticket(S.OPEN)
+    ticket.change_status(S.PENDING_ASSIGNMENT, changed_by=ANALYST, reason="Derivado a L1")
+    ticket.change_status(S.ASSIGNED_L1, changed_by=ANALYST, assignee_id=ANALYST, reason="Tomado por analista")
+
+    assert len(ticket.status_history) == 2
+    first, second = ticket.status_history
+    assert first.previous_status is S.OPEN and first.new_status is S.PENDING_ASSIGNMENT
+    assert first.changed_by == ANALYST and first.reason == "Derivado a L1"
+    assert second.previous_status is S.PENDING_ASSIGNMENT and second.new_status is S.ASSIGNED_L1
+    assert second.changed_by == ANALYST and second.reason == "Tomado por analista"

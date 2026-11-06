@@ -70,6 +70,15 @@ def test_full_happy_path_until_closed(api_client, actors, ticket_id):
     body = response.json()
     assert body["resolved_at"] is not None and body["closed_at"] is not None
     assert body["current_tier"] == "TIER_L2"
+    history = body["status_history"]
+    assert len(history) == 5
+    assert [(h["previous_status"], h["new_status"]) for h in history] == [
+        ("OPEN", "PENDING_ASSIGNMENT"),
+        ("PENDING_ASSIGNMENT", "ASSIGNED_L1"),
+        ("ASSIGNED_L1", "ESCALATED_L2"),
+        ("ESCALATED_L2", "RESOLVED"),
+        ("RESOLVED", "CLOSED"),
+    ]
 
 
 def test_taking_a_ticket_assigns_it_to_the_analyst(api_client, actors, ticket_id, db_session):

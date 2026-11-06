@@ -1,4 +1,4 @@
-"""Agregado Ticket y su entidad interna TicketComment."""
+"""Agregado Ticket y sus entidades internas TicketComment y TicketStatusChange."""
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -42,6 +42,26 @@ class TicketComment:
             raise InvalidTicketDataError("El comentario no puede estar vacío.")
 
 
+@dataclass(frozen=True)
+class TicketStatusChange:
+    """Registro inmutable de una transición de estado del ticket (US14, T45)."""
+
+    previous_status: TicketStatus
+    new_status: TicketStatus
+    changed_by: uuid.UUID | None = None
+    reason: str | None = None
+    id: uuid.UUID = field(default_factory=uuid.uuid4)
+    changed_at: datetime = field(default_factory=_now)
+
+    @property
+    def from_status(self) -> TicketStatus:
+        return self.previous_status
+
+    @property
+    def to_status(self) -> TicketStatus:
+        return self.new_status
+
+
 class Ticket(AggregateRoot):
     """Agregado raíz del ciclo de vida del incidente."""
 
@@ -62,6 +82,7 @@ class Ticket(AggregateRoot):
         assigned_analyst_id: uuid.UUID | None = None,
         evidences: list[VisualEvidence] | None = None,
         comments: list[TicketComment] | None = None,
+        status_history: list[TicketStatusChange] | None = None,
         created_at: datetime | None = None,
         updated_at: datetime | None = None,
         resolved_at: datetime | None = None,
@@ -82,6 +103,7 @@ class Ticket(AggregateRoot):
         self.assigned_analyst_id = assigned_analyst_id
         self.evidences = list(evidences or [])
         self.comments = list(comments or [])
+        self.status_history = list(status_history or [])
         self.created_at = created_at or _now()
         self.updated_at = updated_at or self.created_at
         self.resolved_at = resolved_at
@@ -202,6 +224,15 @@ class Ticket(AggregateRoot):
         self.status = target
         self.current_tier = state_machine.TIER_BY_STATUS.get(target, self.current_tier)
         self.updated_at = now
+        self.status_history.append(
+            TicketStatusChange(
+                previous_status=previous,
+                new_status=target,
+                changed_by=changed_by,
+                reason=reason,
+                changed_at=now,
+            )
+        )
         self.record_event(
             TicketStatusChanged(
                 ticket_id=self.id,

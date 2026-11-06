@@ -15,6 +15,17 @@ class EvidenceResponse(BaseModel):
     size_bytes: int
 
 
+class StatusHistoryEntryResponse(BaseModel):
+    id: uuid.UUID
+    previous_status: str
+    new_status: str
+    from_status: str
+    to_status: str
+    changed_by: uuid.UUID | None
+    reason: str | None
+    changed_at: datetime
+
+
 class TicketResponse(BaseModel):
     id: uuid.UUID
     code: str
@@ -32,6 +43,7 @@ class TicketResponse(BaseModel):
     resolved_at: datetime | None
     closed_at: datetime | None
     evidences: list[EvidenceResponse]
+    status_history: list[StatusHistoryEntryResponse] = Field(default_factory=list)
 
     @classmethod
     def from_domain(cls, ticket: Ticket) -> "TicketResponse":
@@ -54,6 +66,19 @@ class TicketResponse(BaseModel):
             evidences=[
                 EvidenceResponse(id=e.id, file_name=e.file_name, mime_type=e.mime_type, size_bytes=e.size_bytes)
                 for e in ticket.evidences
+            ],
+            status_history=[
+                StatusHistoryEntryResponse(
+                    id=h.id,
+                    previous_status=h.previous_status.value,
+                    new_status=h.new_status.value,
+                    from_status=h.previous_status.value,
+                    to_status=h.new_status.value,
+                    changed_by=h.changed_by,
+                    reason=h.reason,
+                    changed_at=h.changed_at,
+                )
+                for h in ticket.status_history
             ],
         )
 
