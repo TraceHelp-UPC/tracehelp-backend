@@ -15,3 +15,7 @@ class IllegibleImageError(DomainValidationError):
 
     def __init__(self, detail: str = ILLEGIBLE_IMAGE_MESSAGE) -> None:
         super().__init__(detail)
+
+
+class InvalidConfidenceThresholdError(DomainValidationError):
+    """El puntaje de confianza o el umbral de similitud están fuera del rango permitido [0.0, 1.0]."""

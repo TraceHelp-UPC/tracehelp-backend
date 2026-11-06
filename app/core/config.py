@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     llm_model: str = "gemini-2.5-flash-lite"
     embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = 768
+    rag_min_evidence_threshold: float = 0.70
+    rag_self_service_threshold: float = 0.85
+    rag_top_k: int = 5
 
     # Ingesta de manuales en segundo plano (T23). Las pruebas lo desactivan para no lanzar hilos.
     ingestion_worker_enabled: bool = True

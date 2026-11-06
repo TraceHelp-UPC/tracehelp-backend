@@ -2,7 +2,11 @@
 import re
 from dataclasses import dataclass, field
 
-from app.smart_triage.domain.exceptions import ILLEGIBLE_IMAGE_MESSAGE
+from app.smart_triage.domain.enums import ConfidenceLevel
+from app.smart_triage.domain.exceptions import ILLEGIBLE_IMAGE_MESSAGE, InvalidConfidenceThresholdError
+
+DEFAULT_MIN_EVIDENCE_THRESHOLD = 0.70
+DEFAULT_SELF_SERVICE_THRESHOLD = 0.85
 
 # Una captura es legible si el OCR reconoce al menos estas palabras con buena confianza
 MIN_CONFIDENT_WORDS = 3
@@ -74,3 +78,76 @@ class OcrExtractionResult:
     def feedback_message(self) -> str | None:
         """Mensaje para el colaborador cuando la captura no se puede leer."""
         return None if self.is_legible else ILLEGIBLE_IMAGE_MESSAGE
+
+
+@dataclass(frozen=True)
+class SimilarityThresholds:
+    """Parámetros calibrados de decisión semántica RAG (US11, T33).
+
+    - min_evidence_threshold (0.70): puntaje mínimo para permitir la síntesis generativa con citas.
+    - self_service_threshold (0.85): puntaje mínimo para proponer autoservicio directo al colaborador.
+    """
+
+    min_evidence_threshold: float = DEFAULT_MIN_EVIDENCE_THRESHOLD
+    self_service_threshold: float = DEFAULT_SELF_SERVICE_THRESHOLD
+
+    def __post_init__(self) -> None:
+        if not (0.0 <= self.min_evidence_threshold <= 1.0):
+            raise InvalidConfidenceThresholdError("El umbral mínimo de evidencia debe estar entre 0.0 y 1.0.")
+        if not (0.0 <= self.self_service_threshold <= 1.0):
+            raise InvalidConfidenceThresholdError("El umbral de autoservicio debe estar entre 0.0 y 1.0.")
+        if self.min_evidence_threshold > self.self_service_threshold:
+            raise InvalidConfidenceThresholdError(
+                "El umbral mínimo de evidencia no puede superar al umbral de autoservicio."
+            )
+
+
+@dataclass(frozen=True)
+class ConfidenceScore:
+    """Puntaje probabilístico de similitud coseno en [0.0, 1.0] (US11, QAS-04)."""
+
+    value: float
+
+    def __post_init__(self) -> None:
+        if not (0.0 <= self.value <= 1.0):
+            raise InvalidConfidenceThresholdError("El puntaje de confianza debe estar entre 0.0 y 1.0.")
+        object.__setattr__(self, "value", round(float(self.value), 4))
+
+    def meets_minimum_evidence(
+        self, thresholds: SimilarityThresholds = SimilarityThresholds()
+    ) -> bool:
+        return self.value >= thresholds.min_evidence_threshold
+
+    def qualifies_for_self_service(
+        self, thresholds: SimilarityThresholds = SimilarityThresholds()
+    ) -> bool:
+        return self.value >= thresholds.self_service_threshold
+
+    def classify(
+        self, thresholds: SimilarityThresholds = SimilarityThresholds()
+    ) -> ConfidenceLevel:
+        if self.value >= thresholds.self_service_threshold:
+            return ConfidenceLevel.HIGH_SELF_SERVICE
+        if self.value >= thresholds.min_evidence_threshold:
+            return ConfidenceLevel.MEDIUM_ASSISTED
+        return ConfidenceLevel.LOW_CONFIDENCE_ALERT
+
+
+@dataclass(frozen=True)
+class SourceCitation:
+    """Referencia bibliográfica inmutable al manual, página y párrafo utilizado por RAG (US11, DRV-04)."""
+
+    source_file: str
+    page_number: int
+    paragraph_number: int
+    similarity_score: float = DEFAULT_MIN_EVIDENCE_THRESHOLD
+
+    def __post_init__(self) -> None:
+        cleaned_file = (self.source_file or "").strip()
+        if not cleaned_file:
+            raise InvalidConfidenceThresholdError("El nombre del archivo fuente es obligatorio en la cita.")
+        if self.page_number < 1 or self.paragraph_number < 1:
+            raise InvalidConfidenceThresholdError("El número de página y párrafo deben ser mayores o iguales a 1.")
+        if not (0.0 <= self.similarity_score <= 1.0):
+            raise InvalidConfidenceThresholdError("El puntaje de similitud de la cita debe estar entre 0.0 y 1.0.")
+        object.__setattr__(self, "source_file", cleaned_file)
