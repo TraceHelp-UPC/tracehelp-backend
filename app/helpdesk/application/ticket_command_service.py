@@ -8,11 +8,16 @@ from app.helpdesk.application import status_change_policy
 from app.helpdesk.application.ports import IImageProcessor
 from app.helpdesk.application.status_change_policy import Actor
 from app.helpdesk.domain import state_machine
-from app.helpdesk.domain.enums import ImpactLevel, TicketStatus
-from app.helpdesk.domain.exceptions import InvalidVisualEvidenceError, TicketNotFoundError
+from app.helpdesk.domain.enums import ImpactLevel, TicketPriority, TicketStatus
+from app.helpdesk.domain.exceptions import (
+    InvalidVisualEvidenceError,
+    TicketNotFoundError,
+    TicketStatusChangeForbiddenError,
+)
 from app.helpdesk.domain.repositories import ITicketRepository
 from app.helpdesk.domain.ticket import Ticket
 from app.helpdesk.domain.value_objects import MAX_EVIDENCE_BYTES, VisualEvidence
+from app.iam.domain.permissions import Permission
 from app.shared.infrastructure.event_bus import InMemoryEventBus
 
 
@@ -39,6 +44,14 @@ class ChangeTicketStatusCommand:
     actor: Actor
     target_status: TicketStatus
     reason: str | None = None
+
+
+@dataclass(frozen=True)
+class OverrideTicketClassificationCommand:
+    ticket_id: uuid.UUID
+    actor: Actor
+    category: str
+    priority: TicketPriority
 
 
 class TicketCommandService:
@@ -106,6 +119,26 @@ class TicketCommandService:
 
         ticket.change_status(
             command.target_status, changed_by=actor.id, reason=command.reason, assignee_id=assignee_id
+        )
+        self._tickets.save(ticket)
+        self._session.commit()
+        self._events.publish_all(ticket.pull_events())
+        return ticket
+
+    def override_classification(self, command: OverrideTicketClassificationCommand) -> Ticket:
+        """Corrige la categoría y prioridad del ticket conservando la sugerida para auditoría (US27, T42)."""
+        actor = command.actor
+        if Permission.TICKETS_MANAGE not in actor.permissions:
+            raise TicketStatusChangeForbiddenError("No tienes permiso para modificar la clasificación del ticket.")
+
+        ticket = self._tickets.find_by_id(command.ticket_id)
+        if ticket is None or ticket.workspace_id != actor.workspace_id:
+            raise TicketNotFoundError("El ticket no existe.")
+
+        ticket.override_classification(
+            category=command.category,
+            priority=command.priority,
+            analyst_id=actor.id,
         )
         self._tickets.save(ticket)
         self._session.commit()

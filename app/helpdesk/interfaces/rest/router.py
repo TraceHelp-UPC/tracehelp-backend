@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from app.helpdesk.application.status_change_policy import Actor
 from app.helpdesk.application.ticket_command_service import (
     ChangeTicketStatusCommand,
+    OverrideTicketClassificationCommand,
     RegisterTicketCommand,
     TicketCommandService,
     UploadedFile,
@@ -23,7 +24,11 @@ from app.helpdesk.domain.exceptions import (
     TicketNotFoundError,
     TicketStatusChangeForbiddenError,
 )
-from app.helpdesk.interfaces.rest.schemas import ChangeTicketStatusRequest, TicketResponse
+from app.helpdesk.interfaces.rest.schemas import (
+    ChangeTicketStatusRequest,
+    TicketResponse,
+    UpdateTicketClassificationRequest,
+)
 from app.iam.domain.permissions import Permission
 from app.iam.interfaces.rest.auth_dependencies import CurrentUser, get_current_user, require_permission
 from app.shared.domain.exceptions import DomainValidationError
@@ -123,6 +128,42 @@ def change_ticket_status(
         raise HTTPException(422, exc.detail) from exc
     except TicketStatusChangeForbiddenError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, exc.detail) from exc
+    except DomainValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.detail) from exc
+    return TicketResponse.from_domain(ticket)
+
+
+@router.patch(
+    "/tickets/{ticket_id}/classification",
+    response_model=TicketResponse,
+    summary="Corregir la categoría y prioridad de un ticket",
+    responses={
+        400: {"description": "Categoría o prioridad fuera del catálogo permitido"},
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "El rol no tiene permiso para modificar la clasificación"},
+        404: {"description": "El ticket no existe"},
+    },
+)
+def override_ticket_classification(
+    ticket_id: uuid.UUID,
+    body: UpdateTicketClassificationRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: TicketCommandService = Depends(get_ticket_command_service),
+) -> TicketResponse:
+    """Permite al analista modificar la categoría y prioridad del ticket conservando la sugerida (US27, T42)."""
+    actor = Actor(id=current_user.id, workspace_id=current_user.workspace_id, permissions=current_user.permissions)
+    command = OverrideTicketClassificationCommand(
+        ticket_id=ticket_id,
+        actor=actor,
+        category=body.category,
+        priority=body.priority,
+    )
+    try:
+        ticket = service.override_classification(command)
+    except TicketStatusChangeForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.detail) from exc
+    except TicketNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.detail) from exc
     except DomainValidationError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.detail) from exc
     return TicketResponse.from_domain(ticket)

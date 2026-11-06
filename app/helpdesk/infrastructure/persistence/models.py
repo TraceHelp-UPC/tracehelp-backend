@@ -38,6 +38,11 @@ class TicketModel(Base):
     status: Mapped[TicketStatus] = mapped_column(_enum(TicketStatus, "ticket_status"), nullable=False)
     priority: Mapped[TicketPriority] = mapped_column(_enum(TicketPriority, "ticket_priority"), nullable=False)
     current_tier: Mapped[SupportTier] = mapped_column(_enum(SupportTier, "support_tier"), nullable=False)
+    category: Mapped[str] = mapped_column(String(100), nullable=False, server_default=text("'General'"))
+    suggested_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    suggested_priority: Mapped[TicketPriority | None] = mapped_column(
+        _enum(TicketPriority, "suggested_ticket_priority"), nullable=True
+    )
     external_itsm_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
