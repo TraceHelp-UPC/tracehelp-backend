@@ -79,3 +79,52 @@ def step_ticket_status(context, status):
 def step_ticket_assigned(context, role):
     context.session.expire_all()
     assert context.session.get(TicketModel, context.ticket_id).assigned_analyst_id == context.users[role].id
+
+
+def _token_for(context, user_model) -> str:
+    user = SqlAlchemyUserRepository(context.session).find_by_id(user_model.id)
+    token, _ = get_token_provider().issue_access_token(user)
+    return token
+
+
+@given("another collaborator in the same workspace")
+def step_other_collaborator(context):
+    other = UserModel(
+        id=uuid.uuid4(), workspace_id=context.workspace.id, full_name="Otro Colaborador",
+        email=f"otro-{uuid.uuid4().hex[:6]}@demo.pe", password_hash=FAKE_HASH,
+        role=RoleName.COLLABORATOR, department="Ventas",
+    )
+    context.session.add(other)
+    context.session.flush()
+    context.other_collaborator = other
+
+
+@when('the other collaborator changes the ticket status to "{status}"')
+def step_other_changes_status(context, status):
+    context.response = context.client.patch(
+        f"/api/v1/tickets/{context.ticket_id}/status",
+        json={"status": status},
+        headers={"Authorization": f"Bearer {_token_for(context, context.other_collaborator)}"},
+    )
+
+
+@when('the "{role}" changes the status of a nonexistent ticket to "{status}"')
+def step_change_unknown_ticket(context, role, status):
+    context.response = context.client.patch(
+        f"/api/v1/tickets/{uuid.uuid4()}/status",
+        json={"status": status},
+        headers={"Authorization": f"Bearer {_token_for(context, context.users[role])}"},
+    )
+
+
+@then('the response shows the ticket in status "{status}"')
+def step_response_ticket_status(context, status):
+    body = context.response.json()
+    assert body["id"] == str(context.ticket_id), body
+    assert body["status"] == status, body
+
+
+@then("the response shows the resolution date")
+def step_response_resolved_at(context):
+    assert context.response.json()["resolved_at"] is not None
+
