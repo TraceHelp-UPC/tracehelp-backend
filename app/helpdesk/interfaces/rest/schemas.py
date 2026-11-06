@@ -63,3 +63,12 @@ class ChangeTicketStatusRequest(BaseModel):
     reason: str | None = Field(
         None, max_length=MAX_REASON_LENGTH, description="Motivo del cambio (opcional)", examples=["Tomo el ticket"]
     )
+
+
+class AnalystAvailabilityRequest(BaseModel):
+    availability: str = Field(..., description="Disponibilidad: AVAILABLE o UNAVAILABLE", examples=["UNAVAILABLE"])
+
+
+class AnalystAvailabilityResponse(BaseModel):
+    user_id: uuid.UUID
+    availability_status: str

@@ -213,3 +213,12 @@ class Ticket(AggregateRoot):
                 reason=reason,
             )
         )
+
+    def assign_to(self, analyst_id: uuid.UUID) -> None:
+        """Asigna el ticket al analista y lo transiciona a ASSIGNED_L1 (US24, T47)."""
+        self.change_status(
+            TicketStatus.ASSIGNED_L1,
+            changed_by=analyst_id,
+            reason="Ticket asignado al analista",
+            assignee_id=analyst_id,
+        )

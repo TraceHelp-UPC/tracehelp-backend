@@ -111,3 +111,35 @@ class TicketCommandService:
         self._session.commit()
         self._events.publish_all(ticket.pull_events())
         return ticket
+
+    def assign_ticket(self, ticket_id: uuid.UUID, actor: Actor) -> Ticket:
+        """Asigna el ticket al analista autenticado pasando el estado a ASSIGNED_L1 (US24, T47)."""
+        ticket = self._tickets.find_by_id(ticket_id)
+        if ticket is None or ticket.workspace_id != actor.workspace_id:
+            raise TicketNotFoundError("El ticket no existe.")
+
+        # Si ya está asignado al mismo analista, es idempotente y retorna 200 OK
+        if ticket.status is TicketStatus.ASSIGNED_L1 and ticket.assigned_analyst_id == actor.id:
+            return ticket
+
+        # Si está en OPEN, transiciona a PENDING_ASSIGNMENT para ser tomado por el analista
+        if ticket.status is TicketStatus.OPEN:
+            ticket.change_status(
+                TicketStatus.PENDING_ASSIGNMENT,
+                changed_by=actor.id,
+                reason="Enviado a cola de analistas L1",
+            )
+
+        state_machine.ensure_transition(ticket.status, TicketStatus.ASSIGNED_L1)
+        status_change_policy.authorize(actor, ticket, TicketStatus.ASSIGNED_L1)
+
+        ticket.change_status(
+            TicketStatus.ASSIGNED_L1,
+            changed_by=actor.id,
+            reason="Ticket asignado al analista",
+            assignee_id=actor.id,
+        )
+        self._tickets.save(ticket)
+        self._session.commit()
+        self._events.publish_all(ticket.pull_events())
+        return ticket
