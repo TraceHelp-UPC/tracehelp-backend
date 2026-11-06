@@ -1,5 +1,5 @@
 """Excepciones del contexto Smart Triage."""
-from app.shared.domain.exceptions import DomainValidationError
+from app.shared.domain.exceptions import DomainError, DomainValidationError, ResourceNotFoundError
 
 ILLEGIBLE_IMAGE_MESSAGE = (
     "No pudimos leer el texto de la captura. Sube una captura más nítida o describe el problema con más detalle."
@@ -15,3 +15,19 @@ class IllegibleImageError(DomainValidationError):
 
     def __init__(self, detail: str = ILLEGIBLE_IMAGE_MESSAGE) -> None:
         super().__init__(detail)
+
+
+class InvalidConfidenceThresholdError(DomainValidationError):
+    """El puntaje de confianza o el umbral de similitud están fuera del rango permitido [0.0, 1.0]."""
+
+
+class InvalidTriageReviewError(DomainValidationError):
+    """Faltan datos requeridos para la revisión humana HITL o no son válidos."""
+
+
+class TriageDiagnosisNotFoundError(ResourceNotFoundError):
+    """El diagnóstico solicitado no existe o pertenece a otro workspace (HTTP 404)."""
+
+
+class TriageDiagnosisAlreadyReviewedError(DomainError):
+    """El diagnóstico ya fue revisado previamente por un analista (HTTP 409)."""
