@@ -8,11 +8,13 @@ from fastapi.responses import JSONResponse
 from app.analytics.interfaces.rest.router import router as analytics_router
 from app.core import database
 from app.core.config import get_settings
+from app.core.error_handlers import register_error_handlers
 from app.core.event_handlers import register_event_handlers
 from app.helpdesk.interfaces.rest.router import router as helpdesk_router
 from app.iam.interfaces.rest.router import router as iam_router
 from app.knowledge.interfaces.rest.router import router as knowledge_router
 from app.shared.infrastructure.event_bus import event_bus
+from app.shared.interfaces.rest.problem_details import ProblemDetail
 from app.smart_triage.interfaces.rest.router import router as smart_triage_router
 
 settings = get_settings()
@@ -33,10 +35,16 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    register_error_handlers(app)
     register_event_handlers(event_bus)
 
+    # Todos los errores siguen RFC 7807 (T02); se documenta el esquema en Swagger
+    error_responses = {
+        "4XX": {"model": ProblemDetail, "description": "Error del cliente (application/problem+json)"},
+        "5XX": {"model": ProblemDetail, "description": "Error del servidor (application/problem+json)"},
+    }
     for router in (iam_router, helpdesk_router, knowledge_router, smart_triage_router, analytics_router):
-        app.include_router(router, prefix=settings.api_prefix)
+        app.include_router(router, prefix=settings.api_prefix, responses=error_responses)
 
     @app.get("/health", tags=["Health"])
     def health() -> JSONResponse:

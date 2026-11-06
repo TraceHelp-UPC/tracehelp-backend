@@ -11,3 +11,6 @@ PyJWT>=2.9
 pillow>=10.4
 # OCR de capturas (T26); el binario de Tesseract ya está en la imagen Docker
 pytesseract>=0.3.13
+# Anonimización PII (T27): NER en español con spaCy
+spacy>=3.8,<3.9
+es_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl

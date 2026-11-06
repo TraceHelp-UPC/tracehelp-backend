@@ -92,3 +92,28 @@ Usuarios de prueba: `docker compose exec api python -m app.scripts.seed_demo_dat
 
 - Ramas: GitFlow (`feature/<ID>-<descripcion>` desde `develop`).
 - Commits: Conventional Commits con scopes `iam`, `helpdesk`, `smart-triage`, `knowledge`, `analytics`, `infra`.
+
+## Anonimización antes de Gemini (PII)
+
+Ningún texto sale hacia Gemini sin pasar por `app/shared/infrastructure/pii_masker.py` (T27). El módulo
+oculta credenciales, tokens, correos, IP, DNI, teléfonos, usuarios y nombres de personas (spaCy) y firma el
+resultado con un sello HMAC (`PII_AUDIT_SECRET`). Los adaptadores de Gemini reciben `SanitizedText` y llaman a
+`ensure_sealed(texto, masker)` antes de enviar; un `str` sin sello se rechaza.
+
+```python
+from app.shared.domain.pii import ensure_sealed
+from app.shared.infrastructure.pii_masker import get_pii_masker
+
+masker = get_pii_masker()
+seguro = masker.mask("Soy Carlos, mi IP es 10.4.2.18")
+texto_para_gemini = ensure_sealed(seguro, masker)   # "Soy [REDACTED_PERSON], mi IP es [REDACTED_IP]"
+```
+## Formato de errores (RFC 7807)
+
+Todos los errores responden `application/problem+json` con `type`, `title`, `status`, `detail` e `instance`
+(los de validación agregan `errors` por campo). `detail` siempre es texto, porque Appsmith lo muestra con
+`showAlert(Query.data?.detail)`.
+
+Las excepciones de dominio no necesitan traducirse en el router: `ResourceNotFoundError` responde 404,
+`DomainValidationError` 400 y cualquier otro `DomainError` 422. Si una excepción necesita otro código
+(401, 403, 409...), se agrega en `app/core/error_handlers.py`.
