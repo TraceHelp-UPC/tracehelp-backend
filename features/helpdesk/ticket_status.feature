@@ -14,6 +14,24 @@ Feature: Ticket lifecycle state machine
     And the ticket status is "ASSIGNED_L1"
     And the ticket is assigned to the "ANALYST_L1"
 
+  Scenario: A valid update returns the updated ticket
+    Given the ticket is in status "ASSIGNED_L1"
+    When the "ANALYST_L1" changes the ticket status to "RESOLVED"
+    Then the response status is 200
+    And the response shows the ticket in status "RESOLVED"
+    And the response shows the resolution date
+
+  Scenario: Updating a ticket that does not exist
+    When the "ANALYST_L1" changes the status of a nonexistent ticket to "PENDING_ASSIGNMENT"
+    Then the response status is 404
+    And the error detail says "El ticket no existe."
+
+  Scenario: A ticket reported by another collaborator is treated as nonexistent
+    Given another collaborator in the same workspace
+    When the other collaborator changes the ticket status to "PENDING_ASSIGNMENT"
+    Then the response status is 404
+    And the ticket status is "OPEN"
+
   Scenario Outline: Allowed transitions for the authorized role
     Given the ticket is in status "<from>"
     When the "<role>" changes the ticket status to "<to>"

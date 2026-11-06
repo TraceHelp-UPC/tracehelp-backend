@@ -108,3 +108,12 @@ masker = get_pii_masker()
 seguro = masker.mask("Soy Carlos, mi IP es 10.4.2.18")
 texto_para_gemini = ensure_sealed(seguro, masker)   # "Soy [REDACTED_PERSON], mi IP es [REDACTED_IP]"
 ```
+## Formato de errores (RFC 7807)
+
+Todos los errores responden `application/problem+json` con `type`, `title`, `status`, `detail` e `instance`
+(los de validación agregan `errors` por campo). `detail` siempre es texto, porque Appsmith lo muestra con
+`showAlert(Query.data?.detail)`.
+
+Las excepciones de dominio no necesitan traducirse en el router: `ResourceNotFoundError` responde 404,
+`DomainValidationError` 400 y cualquier otro `DomainError` 422. Si una excepción necesita otro código
+(401, 403, 409...), se agrega en `app/core/error_handlers.py`.
