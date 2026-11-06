@@ -108,3 +108,22 @@ masker = get_pii_masker()
 seguro = masker.mask("Soy Carlos, mi IP es 10.4.2.18")
 texto_para_gemini = ensure_sealed(seguro, masker)   # "Soy [REDACTED_PERSON], mi IP es [REDACTED_IP]"
 ```
+
+## Ingesta de manuales (Knowledge Management)
+
+1. `POST /api/v1/workspaces/{id}/documents` (rol IT_LEADER) recibe un PDF o Markdown de hasta 25 MB y responde
+   **202** con `job_id`.
+2. Un worker en segundo plano (`app/knowledge/infrastructure/ingestion_worker.py`) extrae el texto por página y
+   párrafo, lo divide en fragmentos con solapamiento, lo anonimiza (PII) y genera embeddings con
+   `gemini-embedding-001` (768 dimensiones, normalizados) que se guardan en `kb_knowledge_chunks` con índice HNSW.
+3. `GET /api/v1/documents/jobs/{job_id}` muestra el avance: `PENDING → PROCESSING → VECTORIZED` o `FAILED` con
+   el motivo en `error_message`.
+
+Para probarlo en local hace falta `GEMINI_API_KEY` en el `.env`; sin la clave el documento termina en `FAILED`
+con el mensaje "falta GEMINI_API_KEY". Si la API se reinicia a mitad de una ingesta, al arrancar se reanudan los
+documentos que quedaron `PENDING` o `PROCESSING`. En las pruebas el worker está desactivado
+(`INGESTION_WORKER_ENABLED=false`) y Gemini siempre se simula.
+
+Nota sobre migraciones con pgvector: `alembic revision --autogenerate` genera la columna como
+`pgvector.sqlalchemy.vector.VECTOR(dim=768)` sin importar el módulo; cámbiala por `Vector(768)` con
+`from pgvector.sqlalchemy import Vector` (ver `alembic/versions/20261106_0003_knowledge_chunks.py`).

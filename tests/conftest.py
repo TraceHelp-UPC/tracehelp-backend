@@ -17,6 +17,9 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 
+# Las pruebas no lanzan el worker de ingesta en segundo plano (T23); el pipeline se prueba directamente
+os.environ.setdefault("INGESTION_WORKER_ENABLED", "false")
+
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
 FAKE_HASH = "$2b$04$abcdefghijklmnopqrstuuJ8Pn6R6qVqzLqL7vR0Qe2b7r6P9q5Gm"
 
