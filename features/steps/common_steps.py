@@ -8,3 +8,8 @@ def step_response_status(context, status_code):
     assert context.response.status_code == status_code, (
         f"Se esperaba {status_code} y se obtuvo {context.response.status_code}: {context.response.text}"
     )
+
+
+@then('the error detail says "{message}"')
+def step_error_detail(context, message):
+    assert context.response.json()["detail"] == message, context.response.text
