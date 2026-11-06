@@ -1,4 +1,9 @@
-"""Excepciones base del dominio. La T02 las traduce al formato RFC 7807."""
+"""Excepciones base del dominio.
+
+Los manejadores globales (app/shared/interfaces/rest/problem_details.py, T02) las traducen al formato RFC 7807:
+ResourceNotFoundError -> 404, DomainValidationError -> 400 y cualquier otro DomainError -> 422.
+Los códigos especiales (401, 403...) se declaran en app/core/error_handlers.py.
+"""
 
 
 class DomainError(Exception):
