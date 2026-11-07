@@ -1,0 +1,32 @@
+"""Construcción de servicios de Smart Triage para los endpoints."""
+from fastapi import Depends
+from sqlalchemy.orm import Session
+
+from app.core.config import get_settings
+from app.core.database import get_db
+from app.knowledge.infrastructure.retrieval import build_knowledge_retrieval_service
+from app.shared.infrastructure.event_bus import InMemoryEventBus, get_event_bus
+from app.shared.infrastructure.pii_masker import get_pii_masker
+from app.smart_triage.application.evidence_retrieval_service import EvidenceRetrievalService
+from app.smart_triage.domain.grounding import GroundingThresholds
+from app.smart_triage.infrastructure.knowledge.knowledge_context_retriever import KnowledgeContextRetriever
+
+
+def build_evidence_retrieval_service(session: Session, events: InMemoryEventBus) -> EvidenceRetrievalService:
+    settings = get_settings()
+    return EvidenceRetrievalService(
+        retriever=KnowledgeContextRetriever(build_knowledge_retrieval_service(session)),
+        masker=get_pii_masker(),
+        events=events,
+        thresholds=GroundingThresholds(
+            similarity=settings.similarity_threshold, self_service=settings.self_service_threshold
+        ),
+        top_k=settings.retrieval_top_k,
+    )
+
+
+def get_evidence_retrieval_service(
+    db: Session = Depends(get_db),
+    bus: InMemoryEventBus = Depends(get_event_bus),
+) -> EvidenceRetrievalService:
+    return build_evidence_retrieval_service(db, bus)

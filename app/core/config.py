@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     pii_audit_secret: str = "dev-only-pii-secret-cambiar-en-el-env-0123456789"
     pii_spacy_model: str = "es_core_news_sm"
 
+    # Recuperación y evaluación de evidencia (T30). Los umbrales se calibran en T33.
+    similarity_threshold: float = 0.70  # mínimo para usar un fragmento como fuente de la respuesta
+    self_service_threshold: float = 0.85  # mínimo para proponer autoservicio al colaborador
+    retrieval_top_k: int = 5  # fragmentos que se recuperan por consulta
+
     # Notificaciones
     resend_api_key: str = ""
 
