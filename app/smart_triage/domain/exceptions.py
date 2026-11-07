@@ -15,3 +15,7 @@ class IllegibleImageError(DomainValidationError):
 
     def __init__(self, detail: str = ILLEGIBLE_IMAGE_MESSAGE) -> None:
         super().__init__(detail)
+
+
+class EmptyTriageQueryError(DomainValidationError):
+    """No hay texto para buscar en los manuales (HTTP 400)."""

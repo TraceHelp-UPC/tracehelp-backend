@@ -1,0 +1,19 @@
+"""Eventos de dominio del contexto Smart Triage."""
+import uuid
+from dataclasses import dataclass
+
+from app.shared.domain.aggregate_root import DomainEvent
+
+
+@dataclass(frozen=True, kw_only=True)
+class LowConfidenceAlertRaised(DomainEvent):
+    """Ningún fragmento de los manuales superó el umbral de evidencia (US11).
+
+    No se genera respuesta automática: el ticket lo resuelve un analista. La bitácora de auditoría (T36) lo registra.
+    """
+
+    workspace_id: uuid.UUID
+    ticket_id: uuid.UUID | None
+    best_score: float
+    similarity_threshold: float
+    fragments_retrieved: int
