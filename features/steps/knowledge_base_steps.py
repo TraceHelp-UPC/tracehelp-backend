@@ -117,6 +117,7 @@ def _upload(context, role: str, title: str | None = None) -> None:
     )
     if context.response.status_code == 202:
         context.last_document_id = context.response.json()["document_id"]
+        context.job_id = context.response.json()["job_id"]
 
 
 @when('the "{role}" uploads the manual with the title "{title}"')
