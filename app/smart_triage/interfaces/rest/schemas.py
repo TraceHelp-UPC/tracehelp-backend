@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 
 from app.knowledge.application.knowledge_retrieval_service import MAX_TOP_K
 from app.smart_triage.application.evidence_retrieval_service import MAX_QUERY_CHARACTERS
+from app.smart_triage.domain.diagnosis import DiagnosisOutcome
 from app.smart_triage.domain.grounding import EvidenceFragment, GroundingEvaluation
 
 
@@ -58,4 +59,63 @@ class EvidenceSearchResponse(BaseModel):
             self_service_threshold=e.thresholds.self_service,
             low_confidence_alert=e.requires_low_confidence_alert,
             fragments=[EvidenceFragmentResponse.from_fragment(f, e.thresholds.similarity) for f in e.retrieved],
+        )
+
+
+class DiagnosisPreviewRequest(BaseModel):
+    incident: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_QUERY_CHARACTERS,
+        examples=["No puedo conectarme a la VPN desde mi casa, me sale el error 809"],
+    )
+
+
+class DiagnosisSourceResponse(BaseModel):
+    reference: str = Field(..., examples=["F1"])
+    citation: str
+    document_title: str
+    similarity: float
+
+
+class GeneratedDiagnosisResponse(BaseModel):
+    summary: str
+    steps: list[str]
+    sources: list[DiagnosisSourceResponse]
+    model: str
+
+
+class DiagnosisPreviewResponse(BaseModel):
+    status: str = Field(..., description="ANSWERED, INSUFFICIENT_EVIDENCE, MODEL_DECLINED o INVALID_RESPONSE")
+    reason: str | None
+    confidence_level: str
+    best_score: float
+    diagnosis: GeneratedDiagnosisResponse | None
+
+    @classmethod
+    def build(cls, evaluation: GroundingEvaluation, outcome: DiagnosisOutcome) -> "DiagnosisPreviewResponse":
+        diagnosis = None
+        if outcome.diagnosis:
+            d = outcome.diagnosis
+            numbers = {f.chunk_id: i for i, f in enumerate(evaluation.supporting, start=1)}
+            diagnosis = GeneratedDiagnosisResponse(
+                summary=d.summary,
+                steps=list(d.steps),
+                sources=[
+                    DiagnosisSourceResponse(
+                        reference=f"F{numbers[f.chunk_id]}",
+                        citation=f.citation.label,
+                        document_title=f.document_title,
+                        similarity=f.similarity,
+                    )
+                    for f in d.sources
+                ],
+                model=d.model,
+            )
+        return cls(
+            status=outcome.status.value,
+            reason=outcome.reason,
+            confidence_level=evaluation.level.value,
+            best_score=evaluation.best_score,
+            diagnosis=diagnosis,
         )
