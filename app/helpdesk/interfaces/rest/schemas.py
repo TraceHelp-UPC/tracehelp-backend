@@ -1,9 +1,12 @@
 """DTOs de respuesta del contexto Helpdesk."""
+import base64
 import uuid
 from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.helpdesk.application.ticket_queries import EvidenceFile, TicketSummary
+from app.helpdesk.application.ticket_query_service import TicketDetail, TicketListing
 from app.helpdesk.domain.enums import TicketStatus
 from app.helpdesk.domain.ticket import MAX_REASON_LENGTH, Ticket
 
@@ -63,3 +66,125 @@ class ChangeTicketStatusRequest(BaseModel):
     reason: str | None = Field(
         None, max_length=MAX_REASON_LENGTH, description="Motivo del cambio (opcional)", examples=["Tomo el ticket"]
     )
+
+
+class TicketSummaryResponse(BaseModel):
+    """Fila de las bandejas W-04 y W-06 (sin descripción ni capturas)."""
+
+    id: uuid.UUID
+    code: str = Field(..., examples=["TK-0042"])
+    title: str
+    status: str
+    priority: str
+    impact_level: str
+    current_tier: str
+    affected_module: str | None
+    reporter_id: uuid.UUID
+    reporter_name: str | None
+    assigned_analyst_id: uuid.UUID | None
+    assigned_analyst_name: str | None
+    evidence_count: int
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_summary(cls, t: TicketSummary, names: dict[uuid.UUID, str]) -> "TicketSummaryResponse":
+        return cls(
+            id=t.id,
+            code=t.code,
+            title=t.title,
+            status=t.status.value,
+            priority=t.priority.value,
+            impact_level=t.impact_level,
+            current_tier=t.current_tier,
+            affected_module=t.affected_module,
+            reporter_id=t.reporter_id,
+            reporter_name=names.get(t.reporter_id),
+            assigned_analyst_id=t.assigned_analyst_id,
+            assigned_analyst_name=names.get(t.assigned_analyst_id) if t.assigned_analyst_id else None,
+            evidence_count=t.evidence_count,
+            created_at=t.created_at,
+            updated_at=t.updated_at,
+        )
+
+
+class TicketPageResponse(BaseModel):
+    items: list[TicketSummaryResponse]
+    page: int = Field(..., examples=[1])
+    size: int = Field(..., examples=[20])
+    total: int = Field(..., description="Total de tickets que cumplen los filtros", examples=[57])
+    total_pages: int = Field(..., examples=[3])
+
+    @classmethod
+    def from_listing(cls, listing: TicketListing) -> "TicketPageResponse":
+        page = listing.page
+        return cls(
+            items=[TicketSummaryResponse.from_summary(t, listing.names) for t in page.items],
+            page=page.page,
+            size=page.size,
+            total=page.total,
+            total_pages=page.total_pages,
+        )
+
+
+class CommentResponse(BaseModel):
+    id: uuid.UUID
+    author_id: uuid.UUID
+    author_name: str | None
+    content: str
+    is_ai_generated: bool
+    is_internal_note: bool
+    created_at: datetime
+
+
+class TicketDetailResponse(TicketResponse):
+    """Detalle del ticket (W-05 y W-07): datos completos, nombres y comentarios visibles para el usuario."""
+
+    reporter_name: str | None
+    assigned_analyst_name: str | None
+    comments: list[CommentResponse]
+
+    @classmethod
+    def from_detail(cls, detail: TicketDetail) -> "TicketDetailResponse":
+        ticket, names = detail.ticket, detail.names
+        base = TicketResponse.from_domain(ticket).model_dump()
+        comments = [
+            CommentResponse(
+                id=c.id,
+                author_id=c.author_id,
+                author_name=names.get(c.author_id),
+                content=c.content,
+                is_ai_generated=c.is_ai_generated,
+                is_internal_note=c.is_internal_note,
+                created_at=c.created_at,
+            )
+            for c in ticket.comments
+            if detail.include_internal_notes or not c.is_internal_note
+        ]
+        return cls(
+            **base,
+            reporter_name=names.get(ticket.reporter_id),
+            assigned_analyst_name=names.get(ticket.assigned_analyst_id) if ticket.assigned_analyst_id else None,
+            comments=comments,
+        )
+
+
+class EvidenceContentResponse(BaseModel):
+    """Captura lista para mostrarse en un widget Image de Appsmith (src = data_url)."""
+
+    id: uuid.UUID
+    file_name: str
+    mime_type: str
+    size_bytes: int
+    data_url: str = Field(..., description="data:<mime>;base64,<contenido>")
+
+    @classmethod
+    def from_file(cls, evidence: EvidenceFile) -> "EvidenceContentResponse":
+        encoded = base64.b64encode(evidence.content).decode("ascii")
+        return cls(
+            id=evidence.id,
+            file_name=evidence.file_name,
+            mime_type=evidence.mime_type,
+            size_bytes=len(evidence.content),
+            data_url=f"data:{evidence.mime_type};base64,{encoded}",
+        )

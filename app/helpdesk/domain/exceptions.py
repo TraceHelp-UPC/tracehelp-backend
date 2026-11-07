@@ -20,3 +20,11 @@ class TicketNotFoundError(ResourceNotFoundError):
 
 class TicketStatusChangeForbiddenError(DomainError):
     """El usuario no tiene permiso para hacer ese cambio de estado (HTTP 403)."""
+
+
+class TicketAccessDeniedError(DomainError):
+    """El ticket existe en el workspace, pero el usuario no es quien lo reportó ni pertenece a soporte (HTTP 403)."""
+
+
+class EvidenceNotFoundError(ResourceNotFoundError):
+    """La captura no existe o no pertenece al ticket (HTTP 404)."""

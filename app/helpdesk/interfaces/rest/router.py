@@ -6,7 +6,7 @@ Las rutas se montan bajo /api/v1 en app/main.py.
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 
 from app.helpdesk.application.status_change_policy import Actor
 from app.helpdesk.application.ticket_command_service import (
@@ -15,18 +15,27 @@ from app.helpdesk.application.ticket_command_service import (
     TicketCommandService,
     UploadedFile,
 )
-from app.helpdesk.domain.enums import ImpactLevel
+from app.helpdesk.application.ticket_queries import QueueScope
+from app.helpdesk.application.ticket_query_service import TicketQueryService
+from app.helpdesk.domain.enums import ImpactLevel, TicketPriority, TicketStatus
 from app.helpdesk.domain.ticket import MAX_EVIDENCES
-from app.helpdesk.interfaces.rest.dependencies import get_ticket_command_service
+from app.helpdesk.interfaces.rest.dependencies import get_ticket_command_service, get_ticket_query_service
 from app.helpdesk.domain.exceptions import (
     InvalidTicketStateTransitionError,
     TicketNotFoundError,
     TicketStatusChangeForbiddenError,
 )
-from app.helpdesk.interfaces.rest.schemas import ChangeTicketStatusRequest, TicketResponse
+from app.helpdesk.interfaces.rest.schemas import (
+    ChangeTicketStatusRequest,
+    EvidenceContentResponse,
+    TicketDetailResponse,
+    TicketPageResponse,
+    TicketResponse,
+)
 from app.iam.domain.permissions import Permission
 from app.iam.interfaces.rest.auth_dependencies import CurrentUser, get_current_user, require_permission
 from app.shared.domain.exceptions import DomainValidationError
+from app.shared.domain.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, PageRequest
 
 router = APIRouter(tags=["Helpdesk"])
 
@@ -126,3 +135,109 @@ def change_ticket_status(
     except DomainValidationError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.detail) from exc
     return TicketResponse.from_domain(ticket)
+
+
+# --- Consultas (TS08) ---------------------------------------------------------------------------------------
+
+_PAGE_ERRORS = {
+    400: {"description": "Página fuera de rango o tamaño de página no válido"},
+    401: {"description": "Token ausente o inválido"},
+}
+PageNumber = Annotated[int, Query(description="Número de página, desde 1")]
+PageSize = Annotated[int, Query(description=f"Tickets por página, de 1 a {MAX_PAGE_SIZE}")]
+SearchText = Annotated[str | None, Query(max_length=100, description="Texto del asunto o código (TK-0042)")]
+
+
+def _actor(user: CurrentUser) -> Actor:
+    return Actor(id=user.id, workspace_id=user.workspace_id, permissions=user.permissions)
+
+
+@router.get(
+    "/tickets/queue",
+    response_model=TicketPageResponse,
+    summary="Bandeja del analista",
+    responses={**_PAGE_ERRORS, 403: {"description": "El rol no atiende tickets (requiere tickets:manage)"}},
+)
+def get_ticket_queue(
+    scope: Annotated[QueueScope, Query(description="mine: mi cola · unassigned: pendientes de asignación · escalated: en Nivel 2 · all: todos los activos")] = QueueScope.MINE,
+    status_filter: Annotated[TicketStatus | None, Query(alias="status", description="Filtra por estado")] = None,
+    priority: Annotated[TicketPriority | None, Query(description="Filtra por prioridad")] = None,
+    search: SearchText = None,
+    page: PageNumber = 1,
+    size: PageSize = DEFAULT_PAGE_SIZE,
+    current_user: CurrentUser = Depends(require_permission(Permission.TICKETS_MANAGE)),
+    service: TicketQueryService = Depends(get_ticket_query_service),
+) -> TicketPageResponse:
+    """Tickets del workspace para la Mesa de ayuda (W-06), ordenados por prioridad (CRITICAL primero) y antigüedad."""
+    listing = service.queue(
+        _actor(current_user),
+        scope=scope,
+        status=status_filter,
+        priority=priority,
+        search=search,
+        page=PageRequest(page=page, size=size),
+    )
+    return TicketPageResponse.from_listing(listing)
+
+
+@router.get(
+    "/tickets/my-history",
+    response_model=TicketPageResponse,
+    summary="Mis tickets",
+    responses={**_PAGE_ERRORS, 403: {"description": "El rol no puede consultar sus tickets"}},
+)
+def get_my_ticket_history(
+    status_filter: Annotated[TicketStatus | None, Query(alias="status", description="Filtra por estado")] = None,
+    search: SearchText = None,
+    page: PageNumber = 1,
+    size: PageSize = DEFAULT_PAGE_SIZE,
+    current_user: CurrentUser = Depends(require_permission(Permission.TICKETS_READ_OWN)),
+    service: TicketQueryService = Depends(get_ticket_query_service),
+) -> TicketPageResponse:
+    """Incidentes que reportó el usuario (W-04), del más reciente al más antiguo."""
+    listing = service.my_history(
+        _actor(current_user), status=status_filter, search=search, page=PageRequest(page=page, size=size)
+    )
+    return TicketPageResponse.from_listing(listing)
+
+
+@router.get(
+    "/tickets/{ticket_id}",
+    response_model=TicketDetailResponse,
+    summary="Detalle de un ticket",
+    responses={
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "El ticket es de otro colaborador"},
+        404: {"description": "El ticket no existe"},
+    },
+)
+def get_ticket_detail(
+    ticket_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: TicketQueryService = Depends(get_ticket_query_service),
+) -> TicketDetailResponse:
+    """Detalle con evidencias y comentarios (W-05, W-07). Lo ven quien lo reportó y el equipo de soporte.
+
+    Las notas internas solo se muestran al equipo de soporte.
+    """
+    return TicketDetailResponse.from_detail(service.detail(_actor(current_user), ticket_id))
+
+
+@router.get(
+    "/tickets/{ticket_id}/evidences/{evidence_id}",
+    response_model=EvidenceContentResponse,
+    summary="Ver una captura del ticket",
+    responses={
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "El ticket es de otro colaborador"},
+        404: {"description": "El ticket o la captura no existen"},
+    },
+)
+def get_ticket_evidence(
+    ticket_id: uuid.UUID,
+    evidence_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: TicketQueryService = Depends(get_ticket_query_service),
+) -> EvidenceContentResponse:
+    """Devuelve la captura como data URL para mostrarla en un widget Image de Appsmith."""
+    return EvidenceContentResponse.from_file(service.evidence(_actor(current_user), ticket_id, evidence_id))

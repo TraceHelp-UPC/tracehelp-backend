@@ -7,7 +7,7 @@ Aquí solo se agregan las excepciones que necesitan otro código. Cada contexto 
 """
 from fastapi import FastAPI
 
-from app.helpdesk.domain.exceptions import TicketStatusChangeForbiddenError
+from app.helpdesk.domain.exceptions import TicketAccessDeniedError, TicketStatusChangeForbiddenError
 from app.iam.domain.exceptions import InactiveUserError, InvalidCredentialsError, InvalidTokenError
 from app.shared.interfaces.rest.problem_details import register_problem_handlers
 
@@ -18,6 +18,7 @@ STATUS_BY_EXCEPTION: dict[type[Exception], int] = {
     InactiveUserError: 403,
     # Helpdesk
     TicketStatusChangeForbiddenError: 403,
+    TicketAccessDeniedError: 403,
 }
 
 
