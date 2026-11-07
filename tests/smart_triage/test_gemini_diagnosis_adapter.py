@@ -50,7 +50,7 @@ def test_requests_structured_json_with_the_system_instruction():
 
     assert draft.answerable and draft.cited_fragments == (1,) and draft.steps == ("Reinicia el router [F1].",)
     call = models.calls[0]
-    assert call["model"] == "gemini-2.5-flash-lite"
+    assert call["model"] == "gemini-3.5-flash-lite"
     assert "[F1] Fuente: Manual.pdf, pág. 1, párr. 17" in call["contents"]
     config = call["config"]
     assert config.response_mime_type == "application/json"
@@ -81,6 +81,11 @@ def test_gives_up_after_the_last_attempt():
 def test_malformed_output_is_reported(text):
     with pytest.raises(InvalidLlmResponseError):
         adapter(FakeModels([reply(text)])).generate(prompt())
+
+
+def test_truncated_json_reports_the_finish_reason():
+    with pytest.raises(InvalidLlmResponseError, match="MAX_TOKENS"):
+        adapter(FakeModels([reply('{"answerable": true, "summary": "Pue', "MAX_TOKENS")])).generate(prompt())
 
 
 def test_blocked_response_is_reported_with_its_reason():

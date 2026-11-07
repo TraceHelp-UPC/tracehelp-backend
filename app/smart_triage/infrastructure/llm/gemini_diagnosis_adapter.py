@@ -1,4 +1,8 @@
-"""Diagnóstico con Google Gemini (gemini-2.5-flash-lite) (T31, LlmProviderAclAdapter).
+"""Diagnóstico con Google Gemini (gemini-3.5-flash-lite) (T31, LlmProviderAclAdapter).
+
+Desde septiembre de 2026 la API de Gemini solo atiende gemini-2.5-flash-lite a cuentas que ya lo usaban; para
+proyectos nuevos Google recomienda gemini-3.5-flash-lite. Ese modelo piensa en nivel "minimal" por defecto, que
+basta para una respuesta JSON corta; los tokens de razonamiento cuentan dentro de max_output_tokens.
 
 - Verifica el sello de anonimización de todo el texto antes de enviarlo (GroundedPrompt.render).
 - Pide la respuesta en JSON con un esquema fijo (structured output) y temperatura baja.
@@ -43,12 +47,12 @@ class GeminiDiagnosisAdapter(IDiagnosisGenerator):
         *,
         api_key: str,
         masker: IPiiMasker,
-        model: str = "gemini-2.5-flash-lite",
+        model: str = "gemini-3.5-flash-lite",
         client=None,
         sleep: Callable[[float], None] = time.sleep,
         base_delay_seconds: float = 2.0,
         temperature: float = 0.2,
-        max_output_tokens: int = 1024,
+        max_output_tokens: int = 2048,
     ) -> None:
         self._api_key = api_key
         self._masker = masker
@@ -97,7 +101,9 @@ class GeminiDiagnosisAdapter(IDiagnosisGenerator):
         try:
             payload = DiagnosisPayload.model_validate_json(text)
         except ValidationError as exc:
-            raise InvalidLlmResponseError("Gemini devolvió una respuesta que no cumple el formato JSON pedido.") from exc
+            raise InvalidLlmResponseError(
+                f"Gemini devolvió una respuesta que no cumple el formato JSON pedido (motivo: {_finish_reason(response)})."
+            ) from exc
         return DiagnosisDraft(
             answerable=payload.answerable,
             summary=payload.summary,

@@ -18,10 +18,10 @@ def draft(**changes) -> DiagnosisDraft:
 
 
 def test_valid_answer_keeps_only_the_cited_fragments_as_sources():
-    outcome = validate_draft(draft(), FRAGMENTS, model="gemini-2.5-flash-lite")
+    outcome = validate_draft(draft(), FRAGMENTS, model="gemini-3.5-flash-lite")
     assert outcome.status is DiagnosisStatus.ANSWERED
     assert outcome.diagnosis.sources == (FRAGMENTS[0],)
-    assert outcome.diagnosis.model == "gemini-2.5-flash-lite"
+    assert outcome.diagnosis.model == "gemini-3.5-flash-lite"
 
 
 def test_inline_markers_count_as_citations():

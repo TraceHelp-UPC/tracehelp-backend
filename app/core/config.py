@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     # Inteligencia artificial (Google Gemini)
     gemini_api_key: str = ""
-    llm_model: str = "gemini-2.5-flash-lite"
+    llm_model: str = "gemini-3.5-flash-lite"
     embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = 768
 
