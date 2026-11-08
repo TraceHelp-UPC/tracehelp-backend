@@ -92,17 +92,23 @@ def workspace_and_users(db_session):
 @pytest.fixture()
 def api_client(db_session):
     """Cliente HTTP de la API que usa la sesión transaccional de la prueba."""
+    import contextlib
+
     from fastapi.testclient import TestClient
 
     from app.core.database import get_db
+    from app.core.event_handlers import analytics_audit_handler
     from app.main import app
 
     def _override_get_db():
         yield db_session
 
+    original_factory = analytics_audit_handler._session_factory
+    analytics_audit_handler._session_factory = lambda: contextlib.nullcontext(db_session)
     app.dependency_overrides[get_db] = _override_get_db
     yield TestClient(app)
     app.dependency_overrides.clear()
+    analytics_audit_handler._session_factory = original_factory
 
 
 @pytest.fixture()
