@@ -50,6 +50,27 @@ class TicketModel(Base):
     comments: Mapped[list["TicketCommentModel"]] = relationship(
         back_populates="ticket", cascade="all, delete-orphan", order_by="TicketCommentModel.created_at", lazy="selectin"
     )
+    status_history: Mapped[list["TicketStatusHistoryModel"]] = relationship(
+        back_populates="ticket",
+        cascade="all, delete-orphan",
+        order_by="TicketStatusHistoryModel.changed_at",
+        lazy="selectin",
+    )
+
+
+class TicketStatusHistoryModel(Base):
+    __tablename__ = "helpdesk_ticket_status_history"
+    __table_args__ = (Index("ix_helpdesk_ticket_status_history_ticket_changed", "ticket_id", "changed_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    ticket_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("helpdesk_tickets.id", ondelete="CASCADE"), nullable=False)
+    previous_status: Mapped[TicketStatus] = mapped_column(_enum(TicketStatus, "ticket_status"), nullable=False)
+    new_status: Mapped[TicketStatus] = mapped_column(_enum(TicketStatus, "ticket_status"), nullable=False)
+    changed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("iam_users.id"), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    ticket: Mapped[TicketModel] = relationship(back_populates="status_history")
 
 
 class TicketEvidenceModel(Base):
