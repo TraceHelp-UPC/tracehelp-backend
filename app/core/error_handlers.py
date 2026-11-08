@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from app.helpdesk.domain.exceptions import TicketAccessDeniedError, TicketStatusChangeForbiddenError
 from app.iam.domain.exceptions import InactiveUserError, InvalidCredentialsError, InvalidTokenError
 from app.shared.interfaces.rest.problem_details import register_problem_handlers
+from app.smart_triage.application.diagnosis_query_service import DiagnosisAccessDeniedError
 from app.smart_triage.application.hitl_review_service import HitlPermissionError
 from app.smart_triage.domain.triage_diagnosis import DiagnosisAlreadyReviewedError
 
@@ -23,6 +24,7 @@ STATUS_BY_EXCEPTION: dict[type[Exception], int] = {
     TicketAccessDeniedError: 403,
     # Smart Triage
     HitlPermissionError: 403,
+    DiagnosisAccessDeniedError: 403,
     DiagnosisAlreadyReviewedError: 409,
 }
 

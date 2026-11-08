@@ -71,3 +71,20 @@ def build_hitl_review_service(session: Session, events: InMemoryEventBus):
         tickets=HelpdeskTicketResolver(session, events),
         events=events,
     )
+
+
+def get_diagnosis_query_service(db: Session = Depends(get_db)):
+    from app.smart_triage.application.diagnosis_query_service import DiagnosisQueryService
+    from app.smart_triage.infrastructure.helpdesk.helpdesk_ticket_reader import HelpdeskTicketReader
+    from app.smart_triage.infrastructure.iam_user_names import IamUserNames
+    from app.smart_triage.infrastructure.persistence.triage_diagnosis_repository import (
+        SqlAlchemyTriageDiagnosisRepository,
+    )
+
+    return DiagnosisQueryService(
+        diagnoses=SqlAlchemyTriageDiagnosisRepository(db), tickets=HelpdeskTicketReader(db), users=IamUserNames(db)
+    )
+
+
+def get_hitl_review_service(db: Session = Depends(get_db), bus: InMemoryEventBus = Depends(get_event_bus)):
+    return build_hitl_review_service(db, bus)

@@ -8,27 +8,35 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
-from app.iam.interfaces.rest.auth_dependencies import CurrentUser
+from app.iam.domain.permissions import Permission
+from app.iam.interfaces.rest.auth_dependencies import CurrentUser, get_current_user, require_permission
 from app.knowledge.application.ports import EmbeddingProviderError, EmbeddingProviderNotConfiguredError
 from app.knowledge.interfaces.rest.dependencies import require_knowledge_reader
 from app.smart_triage.application.diagnosis_generation_service import DiagnosisGenerationService
+from app.smart_triage.application.diagnosis_query_service import DiagnosisQueryService
 from app.smart_triage.application.evidence_retrieval_service import (
     EvidenceRetrievalService,
     RetrieveEvidenceCommand,
 )
-from app.smart_triage.application.ports import LlmProviderError, LlmProviderNotConfiguredError
+from app.smart_triage.application.hitl_review_service import HitlReviewService, ReviewDiagnosisCommand
+from app.smart_triage.application.ports import LlmProviderError, LlmProviderNotConfiguredError, Reviewer
 from app.smart_triage.application.triage_analysis_service import AnalyzeIncidentCommand, TriageAnalysisService
 from app.smart_triage.interfaces.rest.dependencies import (
     get_diagnosis_generation_service,
+    get_diagnosis_query_service,
     get_evidence_retrieval_service,
+    get_hitl_review_service,
     get_triage_analysis_service,
 )
 from app.smart_triage.interfaces.rest.schemas import (
     AnalyzeIncidentResponse,
+    DiagnosisResponse,
     DiagnosisPreviewRequest,
     DiagnosisPreviewResponse,
     EvidenceSearchRequest,
     EvidenceSearchResponse,
+    ReviewDiagnosisRequest,
+    ReviewDiagnosisResponse,
 )
 
 router = APIRouter(tags=["Smart Triage"])
@@ -154,3 +162,76 @@ def analyze_incident(
     except (EmbeddingProviderError, LlmProviderError) as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"La IA no respondió: {exc}") from exc
     return AnalyzeIncidentResponse.from_analysis(analysis)
+
+
+# --- Diagnóstico y revisión HITL (TS07) ---------------------------------------------------------------------
+
+
+def _reviewer(user: CurrentUser) -> Reviewer:
+    return Reviewer(id=user.id, workspace_id=user.workspace_id, permissions=user.permissions)
+
+
+@router.get(
+    "/tickets/{ticket_id}/diagnosis",
+    response_model=DiagnosisResponse,
+    response_model_exclude_none=False,
+    summary="Ver el diagnóstico de la IA de un ticket",
+    responses={
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "El ticket es de otro colaborador, o el diagnóstico todavía está en revisión"},
+        404: {"description": "El ticket no existe o el triaje sigue en curso"},
+    },
+)
+def get_ticket_diagnosis(
+    ticket_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: DiagnosisQueryService = Depends(get_diagnosis_query_service),
+) -> DiagnosisResponse:
+    """Diagnóstico del triaje automático (pantalla W-07).
+
+    El equipo de soporte ve la propuesta de la IA con sus fuentes, puntajes, OCR y la revisión; `allowed_actions`
+    indica qué revisiones puede hacer. El colaborador solo lo ve cuando se le propuso como autoservicio.
+    """
+    return DiagnosisResponse.from_view(service.for_ticket(_reviewer(current_user), ticket_id))
+
+
+@router.post(
+    "/triage/diagnoses/{diagnosis_id}/review",
+    response_model=ReviewDiagnosisResponse,
+    summary="Revisar la respuesta de la IA (HITL)",
+    responses={
+        400: {"description": "Faltan o sobran datos para la decisión (resumen, pasos, motivo o respuesta)"},
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "El rol no puede validar respuestas de la IA, o no puede resolver este ticket"},
+        404: {"description": "El diagnóstico no existe"},
+        409: {"description": "El diagnóstico ya fue revisado o no admite esa revisión"},
+        422: {"description": "El ticket no puede resolverse en su estado actual (por ejemplo, nadie lo tomó)"},
+    },
+)
+def review_diagnosis(
+    diagnosis_id: uuid.UUID,
+    body: ReviewDiagnosisRequest,
+    current_user: CurrentUser = Depends(require_permission(Permission.TRIAGE_VALIDATE_HITL)),
+    service: HitlReviewService = Depends(get_hitl_review_service),
+    queries: DiagnosisQueryService = Depends(get_diagnosis_query_service),
+) -> ReviewDiagnosisResponse:
+    """Aprobar (`APPROVE`), editar y aprobar (`EDIT_AND_APPROVE` con `summary` y `steps`), rechazar (`REJECT` con
+    `reason`) o responder manualmente (`MANUAL_RESPONSE` con `response`).
+
+    Todas las decisiones menos el rechazo resuelven el ticket y dejan la respuesta como comentario para el
+    colaborador. Para resolver, el ticket debe estar tomado (ASSIGNED_L1) o escalado (ESCALATED_L2).
+    """
+    reviewer = _reviewer(current_user)
+    result = service.review(
+        ReviewDiagnosisCommand(
+            diagnosis_id=diagnosis_id,
+            reviewer=reviewer,
+            decision=body.decision,
+            summary=body.summary,
+            steps=tuple(body.steps or ()),
+            reason=body.reason,
+            response=body.response,
+        )
+    )
+    view = queries.for_ticket(reviewer, result.diagnosis.ticket_id)
+    return ReviewDiagnosisResponse(ticket_resolved=result.ticket_resolved, diagnosis=DiagnosisResponse.from_view(view))

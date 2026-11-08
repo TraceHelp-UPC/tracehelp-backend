@@ -102,3 +102,26 @@ class ITicketResolver(ABC):
 
         Lanza los errores de Helpdesk si el ticket no puede resolverse (404, 403 o 422).
         """
+
+
+@dataclass(frozen=True)
+class TicketAccess:
+    """Datos mínimos del ticket para decidir quién puede ver su diagnóstico."""
+
+    ticket_id: uuid.UUID
+    workspace_id: uuid.UUID
+    reporter_id: uuid.UUID
+    code: str
+    status: str
+
+
+class ITicketAccessReader(ABC):
+    @abstractmethod
+    def find_access(self, ticket_id: uuid.UUID) -> TicketAccess | None:
+        """Workspace, solicitante y estado del ticket, o None si no existe."""
+
+
+class IUserNames(ABC):
+    @abstractmethod
+    def display_names(self, user_ids) -> dict[uuid.UUID, str]:
+        """Nombre completo por id de usuario."""

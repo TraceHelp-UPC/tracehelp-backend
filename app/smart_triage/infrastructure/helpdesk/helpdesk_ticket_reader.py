@@ -11,11 +11,11 @@ from sqlalchemy.orm import Session
 from app.helpdesk.domain.enums import TicketStatus
 from app.helpdesk.infrastructure.persistence.models import TicketModel
 from app.helpdesk.infrastructure.persistence.ticket_repository import SqlAlchemyTicketRepository
-from app.smart_triage.application.ports import IncidentToTriage, ITicketReader
+from app.smart_triage.application.ports import IncidentToTriage, ITicketAccessReader, ITicketReader, TicketAccess
 from app.smart_triage.infrastructure.persistence.models import TriageDiagnosisModel
 
 
-class HelpdeskTicketReader(ITicketReader):
+class HelpdeskTicketReader(ITicketReader, ITicketAccessReader):
     def __init__(self, session: Session) -> None:
         self._session = session
 
@@ -40,3 +40,23 @@ class HelpdeskTicketReader(ITicketReader):
             .order_by(TicketModel.created_at)
         )
         return list(self._session.scalars(stmt))
+
+    def find_access(self, ticket_id: uuid.UUID) -> TicketAccess | None:
+        row = self._session.execute(
+            select(
+                TicketModel.id,
+                TicketModel.workspace_id,
+                TicketModel.reporter_id,
+                TicketModel.ticket_number,
+                TicketModel.status,
+            ).where(TicketModel.id == ticket_id)
+        ).one_or_none()
+        if row is None:
+            return None
+        return TicketAccess(
+            ticket_id=row.id,
+            workspace_id=row.workspace_id,
+            reporter_id=row.reporter_id,
+            code=f"TK-{row.ticket_number:04d}",
+            status=row.status.value,
+        )
