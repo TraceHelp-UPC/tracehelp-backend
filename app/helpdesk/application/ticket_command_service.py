@@ -10,7 +10,11 @@ from app.helpdesk.application.ports import IImageProcessor
 from app.helpdesk.application.status_change_policy import Actor
 from app.helpdesk.domain import state_machine
 from app.helpdesk.domain.enums import ImpactLevel, TicketStatus
-from app.helpdesk.domain.exceptions import InvalidVisualEvidenceError, TicketNotFoundError
+from app.helpdesk.domain.exceptions import (
+    InvalidTicketStateTransitionError,
+    InvalidVisualEvidenceError,
+    TicketNotFoundError,
+)
 from app.helpdesk.domain.repositories import ITicketRepository
 from app.helpdesk.domain.ticket import Ticket
 from app.helpdesk.domain.value_objects import MAX_EVIDENCE_BYTES, VisualEvidence
@@ -132,3 +136,28 @@ class TicketCommandService:
         self._session.commit()
         self._events.publish_all(ticket.pull_events())
         return ticket
+
+    def stage_resolution(
+        self, ticket_id: uuid.UUID, actor: Actor, *, response_text: str, ai_generated: bool
+    ) -> list:
+        """Deja el ticket en RESOLVED con la respuesta para el colaborador como comentario visible (US15, T35).
+
+        No hace commit: lo hace quien llama, junto con la revisión del diagnóstico, en una sola transacción.
+        Aplica las mismas reglas que PATCH /status: el ticket debe ser del workspace del analista, estar asignado
+        (ASSIGNED_L1) o escalado (ESCALATED_L2), y el rol debe poder resolverlo. Devuelve los eventos por publicar.
+        """
+        ticket = self._tickets.find_by_id(ticket_id)
+        if ticket is None or ticket.workspace_id != actor.workspace_id:
+            raise TicketNotFoundError("El ticket no existe.")
+        if ticket.status is TicketStatus.PENDING_ASSIGNMENT:
+            raise InvalidTicketStateTransitionError(
+                f"Toma el ticket {ticket.code} (Atender) antes de responderlo."
+            )
+        state_machine.ensure_transition(ticket.status, TicketStatus.RESOLVED)
+        status_change_policy.authorize(actor, ticket, TicketStatus.RESOLVED)
+
+        ticket.add_comment(author_id=actor.id, content=response_text, is_ai_generated=ai_generated)
+        reason = "Respuesta de la IA validada por el analista." if ai_generated else "Respuesta manual del analista."
+        ticket.change_status(TicketStatus.RESOLVED, changed_by=actor.id, reason=reason)
+        self._tickets.save(ticket)
+        return ticket.pull_events()

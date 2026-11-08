@@ -20,6 +20,11 @@ _SCALARS = (
     "summary",
     "model",
     "outcome_reason",
+    "reviewed_by",
+    "reviewed_at",
+    "final_summary",
+    "manual_response",
+    "review_note",
     "created_at",
     "updated_at",
 )
@@ -37,6 +42,7 @@ class SqlAlchemyTriageDiagnosisRepository(ITriageDiagnosisRepository):
         for name in _SCALARS:
             setattr(model, name, getattr(diagnosis, name))
         model.steps = list(diagnosis.steps)
+        model.final_steps = list(diagnosis.final_steps)
         model.sources = [
             {
                 "reference": s.reference,
@@ -54,6 +60,10 @@ class SqlAlchemyTriageDiagnosisRepository(ITriageDiagnosisRepository):
         self._session.flush()
         return diagnosis
 
+    def find_by_id(self, diagnosis_id: uuid.UUID) -> TriageDiagnosis | None:
+        model = self._session.get(TriageDiagnosisModel, diagnosis_id)
+        return self._to_domain(model) if model else None
+
     def find_by_ticket_id(self, ticket_id: uuid.UUID) -> TriageDiagnosis | None:
         model = self._session.scalars(
             select(TriageDiagnosisModel).where(TriageDiagnosisModel.ticket_id == ticket_id)
@@ -70,6 +80,7 @@ class SqlAlchemyTriageDiagnosisRepository(ITriageDiagnosisRepository):
         return TriageDiagnosis(
             id=model.id,
             steps=tuple(model.steps or ()),
+            final_steps=tuple(model.final_steps or ()),
             sources=tuple(
                 DiagnosisSource(
                     reference=s["reference"],

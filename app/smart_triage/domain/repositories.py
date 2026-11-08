@@ -11,5 +11,9 @@ class ITriageDiagnosisRepository(ABC):
         """Inserta o actualiza el diagnóstico. No hace commit."""
 
     @abstractmethod
+    def find_by_id(self, diagnosis_id: uuid.UUID) -> TriageDiagnosis | None:
+        """Diagnóstico por su id, o None si no existe."""
+
+    @abstractmethod
     def find_by_ticket_id(self, ticket_id: uuid.UUID) -> TriageDiagnosis | None:
         """Diagnóstico del ticket, o None si todavía no fue triado."""

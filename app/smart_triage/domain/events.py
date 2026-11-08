@@ -33,3 +33,21 @@ class TriageCompleted(DomainEvent):
     confidence_level: str | None
     best_score: float | None
     route: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class AiResolutionReviewed(DomainEvent):
+    """Un analista revisó la respuesta de la IA (US15, T35): aprobó, editó, rechazó o respondió manualmente.
+
+    La bitácora de auditoría (T36) lo registra.
+    """
+
+    diagnosis_id: uuid.UUID
+    ticket_id: uuid.UUID
+    workspace_id: uuid.UUID
+    reviewer_id: uuid.UUID
+    decision: str
+    previous_status: str
+    ai_outcome: str
+    resolves_ticket: bool
+    note: str | None = None

@@ -80,3 +80,25 @@ class ITicketReader(ABC):
     @abstractmethod
     def find_untriaged_open_ticket_ids(self) -> list[uuid.UUID]:
         """Tickets en OPEN que todavía no tienen diagnóstico (por ejemplo, si la API se reinició a mitad del triaje)."""
+
+
+@dataclass(frozen=True)
+class Reviewer:
+    """Analista o especialista que revisa la respuesta de la IA, con los permisos de su token."""
+
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    permissions: frozenset[str]
+
+
+class ITicketResolver(ABC):
+    """Resolución del ticket en Helpdesk cuando la revisión entrega una respuesta final (anticorruption layer)."""
+
+    @abstractmethod
+    def stage_resolution(
+        self, ticket_id: uuid.UUID, reviewer: Reviewer, *, response_text: str, ai_generated: bool
+    ) -> list:
+        """Deja el ticket en RESOLVED con la respuesta, sin commit. Devuelve los eventos de Helpdesk por publicar.
+
+        Lanza los errores de Helpdesk si el ticket no puede resolverse (404, 403 o 422).
+        """

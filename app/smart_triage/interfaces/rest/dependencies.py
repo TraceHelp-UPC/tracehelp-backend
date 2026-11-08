@@ -55,3 +55,19 @@ def get_triage_analysis_service(
     from app.smart_triage.infrastructure.ocr.tesseract_ocr_adapter import TesseractOcrAdapter
 
     return TriageAnalysisService(ocr=TesseractOcrAdapter(), retrieval=retrieval, generation=generation)
+
+
+def build_hitl_review_service(session: Session, events: InMemoryEventBus):
+    """Servicio de revisión HITL (T35); lo expone el endpoint de T39."""
+    from app.smart_triage.application.hitl_review_service import HitlReviewService
+    from app.smart_triage.infrastructure.helpdesk.helpdesk_ticket_resolver import HelpdeskTicketResolver
+    from app.smart_triage.infrastructure.persistence.triage_diagnosis_repository import (
+        SqlAlchemyTriageDiagnosisRepository,
+    )
+
+    return HitlReviewService(
+        session=session,
+        diagnoses=SqlAlchemyTriageDiagnosisRepository(session),
+        tickets=HelpdeskTicketResolver(session, events),
+        events=events,
+    )

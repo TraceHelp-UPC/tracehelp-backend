@@ -11,15 +11,58 @@ from datetime import UTC, datetime
 from enum import StrEnum
 
 from app.shared.domain.aggregate_root import AggregateRoot
-from app.smart_triage.domain.diagnosis import DiagnosisOutcome, DiagnosisStatus
-from app.smart_triage.domain.events import TriageCompleted
+from app.shared.domain.exceptions import DomainError, DomainValidationError
+from app.smart_triage.domain.diagnosis import (
+    MAX_STEP_CHARACTERS,
+    MAX_STEPS,
+    MAX_SUMMARY_CHARACTERS,
+    DiagnosisOutcome,
+    DiagnosisStatus,
+)
+from app.smart_triage.domain.events import AiResolutionReviewed, TriageCompleted
 from app.smart_triage.domain.grounding import ConfidenceLevel, EvidenceFragment, GroundingEvaluation
+
+
+MIN_MANUAL_RESPONSE_CHARACTERS = 10
+MAX_MANUAL_RESPONSE_CHARACTERS = 4000
+MIN_REJECTION_REASON_CHARACTERS = 5
+MAX_REJECTION_REASON_CHARACTERS = 500
 
 
 class ReviewStatus(StrEnum):
     PENDING_REVIEW = "PENDING_REVIEW"  # la IA respondió con evidencia media: un analista debe validarla (T35)
     SELF_SERVICE_PROPOSED = "SELF_SERVICE_PROPOSED"  # evidencia fuerte: se propuso al colaborador
     NOT_APPLICABLE = "NOT_APPLICABLE"  # no hay respuesta de la IA que revisar
+    APPROVED = "APPROVED"  # el analista aprobó la respuesta de la IA tal cual
+    EDITED_AND_APPROVED = "EDITED_AND_APPROVED"  # el analista corrigió la respuesta y la aprobó
+    REJECTED = "REJECTED"  # el analista descartó la respuesta de la IA
+    MANUAL_RESPONSE = "MANUAL_RESPONSE"  # el analista respondió con su propio texto
+
+
+class ReviewDecision(StrEnum):
+    APPROVE = "APPROVE"
+    EDIT_AND_APPROVE = "EDIT_AND_APPROVE"
+    REJECT = "REJECT"
+    MANUAL_RESPONSE = "MANUAL_RESPONSE"
+
+
+# Qué revisiones admite cada estado del diagnóstico
+_ALLOWED: dict[ReviewDecision, frozenset[ReviewStatus]] = {
+    ReviewDecision.APPROVE: frozenset({ReviewStatus.PENDING_REVIEW}),
+    ReviewDecision.EDIT_AND_APPROVE: frozenset({ReviewStatus.PENDING_REVIEW}),
+    ReviewDecision.REJECT: frozenset({ReviewStatus.PENDING_REVIEW}),
+    ReviewDecision.MANUAL_RESPONSE: frozenset(
+        {ReviewStatus.PENDING_REVIEW, ReviewStatus.REJECTED, ReviewStatus.NOT_APPLICABLE}
+    ),
+}
+
+
+class DiagnosisAlreadyReviewedError(DomainError):
+    """El diagnóstico ya fue revisado o no admite esa revisión (HTTP 409)."""
+
+
+class InvalidReviewError(DomainValidationError):
+    """Datos de la revisión no válidos: texto vacío, demasiado largo o sin motivo (HTTP 400)."""
 
 
 class TicketRoute(StrEnum):
@@ -69,11 +112,142 @@ class TriageDiagnosis(AggregateRoot):
     model: str | None = None
     outcome_reason: str | None = None
     ocr: OcrSummary | None = None
+    reviewed_by: uuid.UUID | None = None
+    reviewed_at: datetime | None = None
+    final_summary: str | None = None  # versión aprobada o editada que ve el colaborador
+    final_steps: tuple[str, ...] = ()
+    manual_response: str | None = None
+    review_note: str | None = None  # motivo del rechazo
     created_at: datetime = field(default_factory=_now)
     updated_at: datetime = field(default_factory=_now)
 
     def __post_init__(self) -> None:
         AggregateRoot.__init__(self)
+
+    @property
+    def is_reviewed(self) -> bool:
+        return self.reviewed_at is not None
+
+    @property
+    def resolves_ticket(self) -> bool:
+        """La revisión entrega una respuesta final al colaborador (todas menos el rechazo)."""
+        return self.review_status in (
+            ReviewStatus.APPROVED,
+            ReviewStatus.EDITED_AND_APPROVED,
+            ReviewStatus.MANUAL_RESPONSE,
+        )
+
+    def can_review(self, decision: ReviewDecision) -> bool:
+        return self.review_status in _ALLOWED[decision]
+
+    def ensure_can_review(self, decision: ReviewDecision) -> None:
+        if self.can_review(decision):
+            return
+        if self.review_status is ReviewStatus.SELF_SERVICE_PROPOSED:
+            raise DiagnosisAlreadyReviewedError(
+                "La solución se propuso al colaborador como autoservicio; la confirma él, no un analista."
+            )
+        if self.review_status is ReviewStatus.NOT_APPLICABLE:
+            raise DiagnosisAlreadyReviewedError(
+                "La IA no generó una respuesta para este ticket: solo se puede responder manualmente."
+            )
+        raise DiagnosisAlreadyReviewedError(f"El diagnóstico ya fue revisado ({self.review_status.value}).")
+
+    def approve(self, reviewer_id: uuid.UUID) -> None:
+        """El analista aprueba la respuesta de la IA tal como está."""
+        self.ensure_can_review(ReviewDecision.APPROVE)
+        self._finish_review(
+            reviewer_id, ReviewStatus.APPROVED, ReviewDecision.APPROVE, summary=self.summary, steps=self.steps
+        )
+
+    def edit_and_approve(self, reviewer_id: uuid.UUID, *, summary: str, steps: list[str] | tuple[str, ...]) -> None:
+        """El analista corrige el texto de la IA y lo aprueba. Se conserva la versión original para la auditoría."""
+        self.ensure_can_review(ReviewDecision.EDIT_AND_APPROVE)
+        summary = (summary or "").strip()
+        clean_steps = tuple(s.strip() for s in steps if s and s.strip())
+        if not summary:
+            raise InvalidReviewError("El resumen editado no puede estar vacío.")
+        if len(summary) > MAX_SUMMARY_CHARACTERS:
+            raise InvalidReviewError(f"El resumen no puede superar los {MAX_SUMMARY_CHARACTERS} caracteres.")
+        if not 1 <= len(clean_steps) <= MAX_STEPS:
+            raise InvalidReviewError(f"La respuesta debe tener entre 1 y {MAX_STEPS} pasos.")
+        if any(len(step) > MAX_STEP_CHARACTERS for step in clean_steps):
+            raise InvalidReviewError(f"Cada paso puede tener como máximo {MAX_STEP_CHARACTERS} caracteres.")
+        self._finish_review(
+            reviewer_id,
+            ReviewStatus.EDITED_AND_APPROVED,
+            ReviewDecision.EDIT_AND_APPROVE,
+            summary=summary,
+            steps=clean_steps,
+        )
+
+    def reject(self, reviewer_id: uuid.UUID, *, reason: str) -> None:
+        """El analista descarta la respuesta de la IA. El ticket sigue abierto con él."""
+        self.ensure_can_review(ReviewDecision.REJECT)
+        reason = (reason or "").strip()
+        if len(reason) < MIN_REJECTION_REASON_CHARACTERS:
+            raise InvalidReviewError("Indica por qué rechazas la respuesta de la IA.")
+        if len(reason) > MAX_REJECTION_REASON_CHARACTERS:
+            raise InvalidReviewError(f"El motivo no puede superar los {MAX_REJECTION_REASON_CHARACTERS} caracteres.")
+        self.review_note = reason
+        self._finish_review(reviewer_id, ReviewStatus.REJECTED, ReviewDecision.REJECT, note=reason)
+
+    def respond_manually(self, reviewer_id: uuid.UUID, *, response: str) -> None:
+        """El analista responde con su propio texto (la IA no respondió o su respuesta se rechazó)."""
+        self.ensure_can_review(ReviewDecision.MANUAL_RESPONSE)
+        response = (response or "").strip()
+        if len(response) < MIN_MANUAL_RESPONSE_CHARACTERS:
+            raise InvalidReviewError("Escribe la respuesta para el colaborador.")
+        if len(response) > MAX_MANUAL_RESPONSE_CHARACTERS:
+            raise InvalidReviewError(
+                f"La respuesta no puede superar los {MAX_MANUAL_RESPONSE_CHARACTERS} caracteres."
+            )
+        self.manual_response = response
+        self._finish_review(reviewer_id, ReviewStatus.MANUAL_RESPONSE, ReviewDecision.MANUAL_RESPONSE)
+
+    def final_response_text(self) -> str | None:
+        """Texto que se entrega al colaborador como respuesta del ticket, o None si la revisión no lo resuelve."""
+        if self.review_status is ReviewStatus.MANUAL_RESPONSE:
+            return self.manual_response
+        if self.review_status not in (ReviewStatus.APPROVED, ReviewStatus.EDITED_AND_APPROVED):
+            return None
+        lines = [self.final_summary or "", ""]
+        lines += [f"{i}. {step}" for i, step in enumerate(self.final_steps, start=1)]
+        if self.sources:
+            lines += ["", "Fuentes: " + "; ".join(f"[{s.reference}] {s.citation}" for s in self.sources)]
+        return "\n".join(lines).strip()
+
+    def _finish_review(
+        self,
+        reviewer_id: uuid.UUID,
+        status: ReviewStatus,
+        decision: ReviewDecision,
+        *,
+        summary: str | None = None,
+        steps: tuple[str, ...] = (),
+        note: str | None = None,
+    ) -> None:
+        previous = self.review_status
+        if summary is not None:
+            self.final_summary = summary
+            self.final_steps = tuple(steps)
+        self.review_status = status
+        self.reviewed_by = reviewer_id
+        self.reviewed_at = _now()
+        self.updated_at = self.reviewed_at
+        self.record_event(
+            AiResolutionReviewed(
+                diagnosis_id=self.id,
+                ticket_id=self.ticket_id,
+                workspace_id=self.workspace_id,
+                reviewer_id=reviewer_id,
+                decision=decision.value,
+                previous_status=previous.value,
+                ai_outcome=self.outcome.value,
+                resolves_ticket=self.resolves_ticket,
+                note=note,
+            )
+        )
 
     @property
     def route(self) -> TicketRoute:
