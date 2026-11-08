@@ -8,6 +8,7 @@ from app.iam.application.authentication_service import AuthenticationService
 from app.iam.infrastructure.persistence.user_repository import SqlAlchemyUserRepository
 from app.iam.infrastructure.security.bcrypt_password_hasher import BcryptPasswordHasher
 from app.iam.infrastructure.security.jwt_token_provider import JwtTokenProvider
+from app.shared.infrastructure.event_bus import InMemoryEventBus, get_event_bus
 
 
 def get_token_provider() -> JwtTokenProvider:
@@ -23,12 +24,14 @@ def get_token_provider() -> JwtTokenProvider:
 def get_authentication_service(
     db: Session = Depends(get_db),
     tokens: JwtTokenProvider = Depends(get_token_provider),
+    bus: InMemoryEventBus = Depends(get_event_bus),
 ) -> AuthenticationService:
     return AuthenticationService(
         session=db,
         users=SqlAlchemyUserRepository(db),
         hasher=BcryptPasswordHasher(),
         tokens=tokens,
+        events=bus,
     )
 
 

@@ -9,6 +9,7 @@ from app.iam.domain.services import IPasswordHasher
 from app.iam.domain.tokens import ITokenProvider, TokenPair
 from app.iam.domain.user import User
 from app.iam.domain.value_objects import EmailAddress
+from app.shared.infrastructure.event_bus import InMemoryEventBus
 
 _INVALID_CREDENTIALS = "Correo o contraseña incorrectos."
 
@@ -26,11 +27,13 @@ class AuthenticationService:
         users: IUserRepository,
         hasher: IPasswordHasher,
         tokens: ITokenProvider,
+        events: InMemoryEventBus | None = None,
     ) -> None:
         self._session = session
         self._users = users
         self._hasher = hasher
         self._tokens = tokens
+        self._events = events
 
     def login(self, email: str, password: str) -> LoginResult:
         try:
@@ -44,7 +47,10 @@ class AuthenticationService:
 
         user.record_login()  # lanza InactiveUserError si la cuenta no está activa
         self._users.save(user)
+        events = user.pull_events()
         self._session.commit()
+        if self._events is not None:
+            self._events.publish_all(events)
         return LoginResult(user=user, tokens=self._tokens.issue_tokens(user))
 
     def refresh(self, refresh_token: str) -> tuple[str, int]:
