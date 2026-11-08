@@ -37,6 +37,24 @@ class TicketDetail:
     include_internal_notes: bool
 
 
+@dataclass(frozen=True)
+class TicketStatusHistoryEntryView:
+    id: uuid.UUID
+    ticket_id: uuid.UUID
+    previous_status: str
+    new_status: str
+    changed_by: uuid.UUID | None
+    changed_by_name: str
+    reason: str | None
+    changed_at: object
+
+
+@dataclass(frozen=True)
+class TicketStatusHistoryView:
+    ticket_id: uuid.UUID
+    items: list[TicketStatusHistoryEntryView]
+
+
 def _clean_search(search: str | None) -> str | None:
     search = (search or "").strip()
     return search[:MAX_SEARCH_LENGTH] or None
@@ -109,6 +127,27 @@ class TicketQueryService:
         if evidence is None:
             raise EvidenceNotFoundError("La captura no existe.")
         return evidence
+
+    def history(self, actor: Actor, ticket_id: uuid.UUID) -> TicketStatusHistoryView:
+        """Historial cronológico de cambios de estado del ticket (US14, T45)."""
+        ticket = self._visible_ticket(actor, ticket_id)
+        entries = sorted(ticket.status_history, key=lambda h: h.changed_at)
+        actor_ids = {h.changed_by for h in entries if h.changed_by is not None}
+        names = self._users.display_names(actor_ids) if actor_ids else {}
+        items = [
+            TicketStatusHistoryEntryView(
+                id=h.id,
+                ticket_id=ticket.id,
+                previous_status=h.previous_status.value,
+                new_status=h.new_status.value,
+                changed_by=h.changed_by,
+                changed_by_name=names.get(h.changed_by, "Usuario") if h.changed_by else "Sistema",
+                reason=h.reason,
+                changed_at=h.changed_at,
+            )
+            for h in entries
+        ]
+        return TicketStatusHistoryView(ticket_id=ticket.id, items=items)
 
     def _visible_ticket(self, actor: Actor, ticket_id: uuid.UUID) -> Ticket:
         ticket = self._tickets.find_by_id(ticket_id)
