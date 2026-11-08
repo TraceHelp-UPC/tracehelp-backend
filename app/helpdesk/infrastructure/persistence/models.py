@@ -10,11 +10,19 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, deferred, mapped_column, relationship
 
 from app.core.database import Base
-from app.helpdesk.domain.enums import ImpactLevel, SupportTier, TicketPriority, TicketStatus
+from app.helpdesk.domain.enums import ImpactLevel, SupportTier, TicketCategory, TicketPriority, TicketStatus
 
 
 def _enum(enum_cls, name: str) -> Enum:
-    return Enum(enum_cls, name=name, native_enum=False, length=30, create_constraint=True, validate_strings=True)
+    return Enum(
+        enum_cls,
+        name=name,
+        native_enum=False,
+        length=30,
+        create_constraint=True,
+        validate_strings=True,
+        values_callable=lambda cls: [e.value for e in cls],
+    )
 
 
 class TicketModel(Base):
@@ -37,6 +45,7 @@ class TicketModel(Base):
     impact_level: Mapped[ImpactLevel] = mapped_column(_enum(ImpactLevel, "impact_level"), nullable=False)
     status: Mapped[TicketStatus] = mapped_column(_enum(TicketStatus, "ticket_status"), nullable=False)
     priority: Mapped[TicketPriority] = mapped_column(_enum(TicketPriority, "ticket_priority"), nullable=False)
+    category: Mapped[TicketCategory | None] = mapped_column(_enum(TicketCategory, "ticket_category"), nullable=True)
     current_tier: Mapped[SupportTier] = mapped_column(_enum(SupportTier, "support_tier"), nullable=False)
     external_itsm_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

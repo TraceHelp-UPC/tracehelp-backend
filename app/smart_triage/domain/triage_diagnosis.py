@@ -18,6 +18,8 @@ from app.smart_triage.domain.diagnosis import (
     MAX_SUMMARY_CHARACTERS,
     DiagnosisOutcome,
     DiagnosisStatus,
+    SuggestedCategory,
+    SuggestedPriority,
 )
 from app.smart_triage.domain.events import AiResolutionReviewed, TriageCompleted
 from app.smart_triage.domain.grounding import ConfidenceLevel, EvidenceFragment, GroundingEvaluation
@@ -110,6 +112,8 @@ class TriageDiagnosis(AggregateRoot):
     steps: tuple[str, ...] = ()
     sources: tuple[DiagnosisSource, ...] = ()
     model: str | None = None
+    suggested_category: SuggestedCategory | None = None
+    suggested_priority: SuggestedPriority | None = None
     outcome_reason: str | None = None
     ocr: OcrSummary | None = None
     reviewed_by: uuid.UUID | None = None
@@ -293,6 +297,8 @@ class TriageDiagnosis(AggregateRoot):
             steps=outcome.diagnosis.steps if answered else (),
             sources=sources,
             model=outcome.diagnosis.model if answered else None,
+            suggested_category=outcome.diagnosis.suggested_category if answered else None,
+            suggested_priority=outcome.diagnosis.suggested_priority if answered else None,
             outcome_reason=outcome.reason,
             ocr=ocr,
         )
@@ -330,6 +336,8 @@ class TriageDiagnosis(AggregateRoot):
                 confidence_level=self.confidence_level.value if self.confidence_level else None,
                 best_score=self.best_score,
                 route=self.route.value,
+                suggested_category=self.suggested_category.value if self.suggested_category else None,
+                suggested_priority=self.suggested_priority.value if self.suggested_priority else None,
             )
         )
 

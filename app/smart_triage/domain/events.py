@@ -23,7 +23,8 @@ class LowConfidenceAlertRaised(DomainEvent):
 class TriageCompleted(DomainEvent):
     """El triaje automático de un ticket terminó (T28).
 
-    Helpdesk lo escucha para mover el ticket a `route` (SELF_SERVICE_PROPOSED o PENDING_ASSIGNMENT).
+    Helpdesk lo escucha para mover el ticket a `route` (SELF_SERVICE_PROPOSED o PENDING_ASSIGNMENT)
+    y aplicar la clasificación sugerida (US27, T41).
     """
 
     diagnosis_id: uuid.UUID
@@ -33,6 +34,8 @@ class TriageCompleted(DomainEvent):
     confidence_level: str | None
     best_score: float | None
     route: str
+    suggested_category: str | None = None
+    suggested_priority: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

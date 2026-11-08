@@ -7,7 +7,7 @@ import logging
 
 from app.core.database import SessionLocal
 from app.helpdesk.application.ticket_command_service import TicketCommandService
-from app.helpdesk.domain.enums import TicketStatus
+from app.helpdesk.domain.enums import TicketCategory, TicketPriority, TicketStatus
 from app.helpdesk.infrastructure.image_processor import PillowImageProcessor
 from app.helpdesk.infrastructure.persistence.ticket_repository import SqlAlchemyTicketRepository
 from app.shared.infrastructure.event_bus import InMemoryEventBus, event_bus
@@ -46,4 +46,12 @@ class TriageRoutingHandler:
                 images=PillowImageProcessor(),
                 events=self._events,
             )
-            service.route_after_triage(event.ticket_id, TicketStatus(event.route), routing_reason(event))
+            category = TicketCategory(event.suggested_category) if event.suggested_category else None
+            priority = TicketPriority(event.suggested_priority) if event.suggested_priority else None
+            service.route_after_triage(
+                event.ticket_id,
+                TicketStatus(event.route),
+                routing_reason(event),
+                suggested_category=category,
+                suggested_priority=priority,
+            )
