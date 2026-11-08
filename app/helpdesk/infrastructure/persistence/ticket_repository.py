@@ -27,6 +27,7 @@ _SCALAR_FIELDS = (
     "impact_level",
     "status",
     "priority",
+    "category",
     "current_tier",
     "created_at",
     "updated_at",

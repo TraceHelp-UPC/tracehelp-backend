@@ -24,7 +24,7 @@ from app.smart_triage.application.ports import (
     LlmProviderError,
     LlmProviderNotConfiguredError,
 )
-from app.smart_triage.domain.diagnosis import DiagnosisDraft
+from app.smart_triage.domain.diagnosis import DiagnosisDraft, SuggestedCategory, SuggestedPriority
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,14 @@ class DiagnosisPayload(BaseModel):
     summary: str = Field(description="Causa probable y solución en una o dos oraciones")
     steps: list[str] = Field(description="Pasos de solución; cada uno termina con su cita, por ejemplo [F1]")
     cited_fragments: list[int] = Field(description="Números de los fragmentos usados, por ejemplo [1, 3]")
+    suggested_category: SuggestedCategory | None = Field(
+        default=None,
+        description="Categoría técnica del incidente: Red/VPN, Correo, Accesos, Hardware, Software u Otro",
+    )
+    suggested_priority: SuggestedPriority | None = Field(
+        default=None,
+        description="Prioridad sugerida según urgencia técnica: LOW, MEDIUM, HIGH o CRITICAL",
+    )
 
 
 class GeminiDiagnosisAdapter(IDiagnosisGenerator):
@@ -109,6 +117,8 @@ class GeminiDiagnosisAdapter(IDiagnosisGenerator):
             summary=payload.summary,
             steps=tuple(payload.steps),
             cited_fragments=tuple(payload.cited_fragments),
+            suggested_category=payload.suggested_category,
+            suggested_priority=payload.suggested_priority,
         )
 
     def _get_client(self):

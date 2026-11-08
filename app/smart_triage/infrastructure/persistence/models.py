@@ -7,13 +7,21 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
-from app.smart_triage.domain.diagnosis import DiagnosisStatus
+from app.smart_triage.domain.diagnosis import DiagnosisStatus, SuggestedCategory, SuggestedPriority
 from app.smart_triage.domain.grounding import ConfidenceLevel
 from app.smart_triage.domain.triage_diagnosis import ReviewStatus
 
 
 def _enum(enum_cls, name: str) -> Enum:
-    return Enum(enum_cls, name=name, native_enum=False, length=30, create_constraint=True, validate_strings=True)
+    return Enum(
+        enum_cls,
+        name=name,
+        native_enum=False,
+        length=30,
+        create_constraint=True,
+        validate_strings=True,
+        values_callable=lambda cls: [e.value for e in cls],
+    )
 
 
 class TriageDiagnosisModel(Base):
@@ -36,6 +44,12 @@ class TriageDiagnosisModel(Base):
     steps: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     sources: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     model: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    suggested_category: Mapped[SuggestedCategory | None] = mapped_column(
+        _enum(SuggestedCategory, "suggested_category"), nullable=True
+    )
+    suggested_priority: Mapped[SuggestedPriority | None] = mapped_column(
+        _enum(SuggestedPriority, "suggested_priority"), nullable=True
+    )
     outcome_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     ocr_legible: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     ocr_error_codes: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))

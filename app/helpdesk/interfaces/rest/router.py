@@ -11,13 +11,14 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from app.helpdesk.application.status_change_policy import Actor
 from app.helpdesk.application.ticket_command_service import (
     ChangeTicketStatusCommand,
+    CorrectTicketClassificationCommand,
     RegisterTicketCommand,
     TicketCommandService,
     UploadedFile,
 )
 from app.helpdesk.application.ticket_queries import QueueScope
 from app.helpdesk.application.ticket_query_service import TicketQueryService
-from app.helpdesk.domain.enums import ImpactLevel, TicketPriority, TicketStatus
+from app.helpdesk.domain.enums import ImpactLevel, TicketCategory, TicketPriority, TicketStatus
 from app.helpdesk.domain.ticket import MAX_EVIDENCES
 from app.helpdesk.interfaces.rest.dependencies import get_ticket_command_service, get_ticket_query_service
 from app.helpdesk.domain.exceptions import (
@@ -27,6 +28,7 @@ from app.helpdesk.domain.exceptions import (
 )
 from app.helpdesk.interfaces.rest.schemas import (
     ChangeTicketStatusRequest,
+    CorrectTicketClassificationRequest,
     EvidenceContentResponse,
     TicketDetailResponse,
     TicketPageResponse,
@@ -131,6 +133,53 @@ def change_ticket_status(
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.detail) from exc
     except InvalidTicketStateTransitionError as exc:
         raise HTTPException(422, exc.detail) from exc
+    except TicketStatusChangeForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.detail) from exc
+    except DomainValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.detail) from exc
+    return TicketResponse.from_domain(ticket)
+
+
+@router.patch(
+    "/tickets/{ticket_id}/classification",
+    response_model=TicketResponse,
+    summary="Establecer o corregir la categoría y prioridad del ticket",
+    responses={
+        400: {"description": "Categoría fuera del catálogo o datos inválidos"},
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "Requiere el permiso tickets:manage"},
+        404: {"description": "El ticket no existe"},
+    },
+)
+def correct_ticket_classification(
+    ticket_id: uuid.UUID,
+    body: CorrectTicketClassificationRequest,
+    current_user: CurrentUser = Depends(require_permission(Permission.TICKETS_MANAGE)),
+    service: TicketCommandService = Depends(get_ticket_command_service),
+) -> TicketResponse:
+    """Permite al analista establecer o corregir la categoría técnica y prioridad del ticket (US27, T42)."""
+    parsed_category: TicketCategory | None = None
+    if body.category is not None:
+        try:
+            parsed_category = TicketCategory(body.category.strip())
+        except ValueError as exc:
+            valid = ", ".join(c.value for c in TicketCategory)
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Categoría inválida '{body.category}'. Las categorías permitidas son: {valid}.",
+            ) from exc
+
+    command = CorrectTicketClassificationCommand(
+        ticket_id=ticket_id,
+        actor=Actor(id=current_user.id, workspace_id=current_user.workspace_id, permissions=current_user.permissions),
+        category=parsed_category,
+        priority=body.priority,
+        reason=body.reason,
+    )
+    try:
+        ticket = service.correct_classification(command)
+    except TicketNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.detail) from exc
     except TicketStatusChangeForbiddenError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, exc.detail) from exc
     except DomainValidationError as exc:

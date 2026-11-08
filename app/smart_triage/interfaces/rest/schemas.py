@@ -89,6 +89,8 @@ class GeneratedDiagnosisResponse(BaseModel):
     steps: list[str]
     sources: list[DiagnosisSourceResponse]
     model: str
+    suggested_category: str | None = None
+    suggested_priority: str | None = None
 
 
 class DiagnosisPreviewResponse(BaseModel):
@@ -117,6 +119,8 @@ class DiagnosisPreviewResponse(BaseModel):
                     for f in d.sources
                 ],
                 model=d.model,
+                suggested_category=d.suggested_category.value if d.suggested_category else None,
+                suggested_priority=d.suggested_priority.value if d.suggested_priority else None,
             )
         return cls(
             status=outcome.status.value,
@@ -182,6 +186,8 @@ class AiAnswerResponse(BaseModel):
     steps: list[str]
     sources: list[AnswerSourceResponse]
     model: str | None = None
+    suggested_category: str | None = None
+    suggested_priority: str | None = None
 
 
 class FinalAnswerResponse(BaseModel):
@@ -245,6 +251,8 @@ class DiagnosisResponse(BaseModel):
                     for s in d.sources
                 ],
                 model=d.model if full else None,
+                suggested_category=d.suggested_category.value if full and d.suggested_category else None,
+                suggested_priority=d.suggested_priority.value if full and d.suggested_priority else None,
             )
         final = FinalAnswerResponse(summary=d.final_summary, steps=list(d.final_steps)) if d.final_summary else None
         data = {

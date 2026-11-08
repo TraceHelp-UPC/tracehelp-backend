@@ -25,6 +25,26 @@ class DiagnosisStatus(StrEnum):
     PROVIDER_ERROR = "PROVIDER_ERROR"  # Gemini no respondió (cuota, red o clave faltante); decide un analista
 
 
+class SuggestedCategory(StrEnum):
+    """Catálogo cerrado de categorías técnicas sugeridas por el triaje (US27, T41)."""
+
+    NETWORK_VPN = "Red/VPN"
+    EMAIL = "Correo"
+    ACCESS = "Accesos"
+    HARDWARE = "Hardware"
+    SOFTWARE = "Software"
+    OTHER = "Otro"
+
+
+class SuggestedPriority(StrEnum):
+    """Prioridades sugeridas por el triaje según la urgencia técnica (US27, T41)."""
+
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
 @dataclass(frozen=True)
 class DiagnosisDraft:
     """Respuesta de la IA tal como llega, antes de validarla."""
@@ -33,6 +53,8 @@ class DiagnosisDraft:
     summary: str
     steps: tuple[str, ...]
     cited_fragments: tuple[int, ...]
+    suggested_category: SuggestedCategory | None = None
+    suggested_priority: SuggestedPriority | None = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +65,8 @@ class GeneratedDiagnosis:
     steps: tuple[str, ...]
     sources: tuple[EvidenceFragment, ...]
     model: str
+    suggested_category: SuggestedCategory = SuggestedCategory.NETWORK_VPN
+    suggested_priority: SuggestedPriority = SuggestedPriority.HIGH
 
     @property
     def citation_labels(self) -> tuple[str, ...]:
@@ -88,9 +112,47 @@ def validate_draft(draft: DiagnosisDraft, fragments: tuple[EvidenceFragment, ...
         return _invalid(f"La respuesta cita fragmentos que no se entregaron: {', '.join(f'F{n}' for n in unknown)}.")
 
     sources = tuple(fragments[n - 1] for n in sorted(cited))
+    category = draft.suggested_category or _infer_category(summary, steps, sources)
+    priority = draft.suggested_priority or _infer_priority(summary, steps, sources)
     return DiagnosisOutcome(
-        DiagnosisStatus.ANSWERED, diagnosis=GeneratedDiagnosis(summary=summary, steps=steps, sources=sources, model=model)
+        DiagnosisStatus.ANSWERED,
+        diagnosis=GeneratedDiagnosis(
+            summary=summary,
+            steps=steps,
+            sources=sources,
+            model=model,
+            suggested_category=category,
+            suggested_priority=priority,
+        ),
     )
+
+
+def _infer_category(
+    summary: str, steps: tuple[str, ...], sources: tuple[EvidenceFragment, ...]
+) -> SuggestedCategory:
+    combined = " ".join([summary, *steps, *(s.document_title for s in sources), *(s.content for s in sources)]).lower()
+    if any(k in combined for k in ("vpn", "red", "puerto", "udp", "router", "firewall", "dns", "wifi", "809")):
+        return SuggestedCategory.NETWORK_VPN
+    if any(k in combined for k in ("outlook", "correo", "buzón", "email", "mail")):
+        return SuggestedCategory.EMAIL
+    if any(k in combined for k in ("contraseña", "cuenta bloqueada", "acceso", "mfa", "authenticator", "permiso", "0x80070005")):
+        return SuggestedCategory.ACCESS
+    if any(k in combined for k in ("impresora", "monitor", "teclado", "disco", "hardware", "0x00000709")):
+        return SuggestedCategory.HARDWARE
+    if any(k in combined for k in ("erp", "teams", "onedrive", "ora-", "fe-2335", "software", "excel", "word")):
+        return SuggestedCategory.SOFTWARE
+    return SuggestedCategory.OTHER
+
+
+def _infer_priority(
+    summary: str, steps: tuple[str, ...], sources: tuple[EvidenceFragment, ...] = ()
+) -> SuggestedPriority:
+    combined = " ".join([summary, *steps, *(s.content for s in sources)]).lower()
+    if any(k in combined for k in ("crítico", "caído", "producción", "facturación", "ora-12541")):
+        return SuggestedPriority.CRITICAL
+    if any(k in combined for k in ("vpn", "bloquead", "error 809", "acceso denegado", "0x80070005", "puerto", "router")):
+        return SuggestedPriority.HIGH
+    return SuggestedPriority.MEDIUM
 
 
 def _invalid(reason: str) -> DiagnosisOutcome:
