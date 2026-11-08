@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 
 from app.helpdesk.application.status_change_policy import Actor
 from app.helpdesk.application.ticket_command_service import (
+    AssignTicketCommand,
     ChangeTicketStatusCommand,
     CorrectTicketClassificationCommand,
     RegisterTicketCommand,
@@ -27,6 +28,7 @@ from app.helpdesk.domain.exceptions import (
     TicketStatusChangeForbiddenError,
 )
 from app.helpdesk.interfaces.rest.schemas import (
+    AssignTicketRequest,
     ChangeTicketStatusRequest,
     CorrectTicketClassificationRequest,
     EvidenceContentResponse,
@@ -182,6 +184,44 @@ def correct_ticket_classification(
         raise HTTPException(status.HTTP_404_NOT_FOUND, exc.detail) from exc
     except TicketStatusChangeForbiddenError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, exc.detail) from exc
+    except DomainValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.detail) from exc
+    return TicketResponse.from_domain(ticket)
+
+
+@router.post(
+    "/tickets/{ticket_id}/assign",
+    response_model=TicketResponse,
+    summary="Asignar un ticket a un analista disponible",
+    responses={
+        400: {"description": "El analista indicado no existe o no es personal de soporte"},
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "El usuario no tiene permiso para asignar tickets"},
+        404: {"description": "El ticket no existe"},
+        422: {"description": "El analista se encuentra UNAVAILABLE o el ticket no puede asignarse"},
+    },
+)
+def assign_ticket(
+    ticket_id: uuid.UUID,
+    body: AssignTicketRequest = AssignTicketRequest(),
+    current_user: CurrentUser = Depends(get_current_user),
+    service: TicketCommandService = Depends(get_ticket_command_service),
+) -> TicketResponse:
+    """Asigna el ticket a un analista disponible (AVAILABLE) y lo pasa a ASSIGNED_L1 (US24, T47)."""
+    command = AssignTicketCommand(
+        ticket_id=ticket_id,
+        actor=Actor(id=current_user.id, workspace_id=current_user.workspace_id, permissions=current_user.permissions),
+        analyst_id=body.analyst_id,
+        reason=body.reason,
+    )
+    try:
+        ticket = service.assign_ticket(command)
+    except TicketNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.detail) from exc
+    except TicketStatusChangeForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.detail) from exc
+    except InvalidTicketStateTransitionError as exc:
+        raise HTTPException(422, exc.detail) from exc
     except DomainValidationError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.detail) from exc
     return TicketResponse.from_domain(ticket)

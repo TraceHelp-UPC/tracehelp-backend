@@ -19,3 +19,6 @@ class IUserRepository(ABC):
 
     @abstractmethod
     def exists_by_email(self, email: EmailAddress) -> bool: ...
+
+    @abstractmethod
+    def find_support_staff_by_workspace(self, workspace_id: uuid.UUID) -> list[User]: ...
