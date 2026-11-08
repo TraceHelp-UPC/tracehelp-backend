@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 
 from app.knowledge.application.knowledge_retrieval_service import MAX_TOP_K
 from app.smart_triage.application.evidence_retrieval_service import MAX_QUERY_CHARACTERS
+from app.smart_triage.application.triage_analysis_service import IncidentAnalysis
 from app.smart_triage.domain.diagnosis import DiagnosisOutcome
 from app.smart_triage.domain.grounding import EvidenceFragment, GroundingEvaluation
 
@@ -118,4 +119,45 @@ class DiagnosisPreviewResponse(BaseModel):
             confidence_level=evaluation.level.value,
             best_score=evaluation.best_score,
             diagnosis=diagnosis,
+        )
+
+
+class OcrResultResponse(BaseModel):
+    screenshot_received: bool
+    legible: bool | None
+    error_codes: list[str]
+    feedback: str | None = Field(None, description="Mensaje para el colaborador si la captura no se pudo leer")
+
+
+class AnalyzeIncidentResponse(BaseModel):
+    """Resultado del análisis multimodal: diagnóstico con citas y puntaje de confianza (TS02)."""
+
+    status: str = Field(..., description="ANSWERED, INSUFFICIENT_EVIDENCE, MODEL_DECLINED o INVALID_RESPONSE")
+    reason: str | None
+    confidence_level: str = Field(..., examples=["GROUNDED"])
+    confidence_score: float = Field(..., description="Mejor similitud coseno entre el incidente y los manuales")
+    similarity_threshold: float
+    self_service_threshold: float
+    ocr: OcrResultResponse
+    diagnosis: GeneratedDiagnosisResponse | None
+
+    @classmethod
+    def from_analysis(cls, analysis: IncidentAnalysis) -> "AnalyzeIncidentResponse":
+        preview = DiagnosisPreviewResponse.build(analysis.evaluation, analysis.outcome)
+        received = bool(analysis.ocr_results)
+        feedback = next((r.feedback_message for r in analysis.ocr_results if r.feedback_message), None)
+        return cls(
+            status=preview.status,
+            reason=preview.reason,
+            confidence_level=preview.confidence_level,
+            confidence_score=preview.best_score,
+            similarity_threshold=analysis.evaluation.thresholds.similarity,
+            self_service_threshold=analysis.evaluation.thresholds.self_service,
+            ocr=OcrResultResponse(
+                screenshot_received=received,
+                legible=analysis.screenshots_legible if received else None,
+                error_codes=list(analysis.error_codes),
+                feedback=None if analysis.screenshots_legible else feedback,
+            ),
+            diagnosis=preview.diagnosis,
         )

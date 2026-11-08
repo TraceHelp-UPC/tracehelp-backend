@@ -32,6 +32,7 @@ def before_all(context):
     # La aplicación lee DATABASE_URL al importarse, por eso se fija antes de importar app.main
     os.environ["DATABASE_URL"] = test_url
     os.environ["INGESTION_WORKER_ENABLED"] = "false"
+    os.environ["TRIAGE_WORKER_ENABLED"] = "false"
     from app.core.config import Settings, get_settings
 
     get_settings.cache_clear()

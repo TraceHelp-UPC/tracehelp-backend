@@ -1,4 +1,5 @@
 """Casos de uso de escritura del contexto Helpdesk."""
+import logging
 import uuid
 from dataclasses import dataclass, field
 
@@ -14,6 +15,8 @@ from app.helpdesk.domain.repositories import ITicketRepository
 from app.helpdesk.domain.ticket import Ticket
 from app.helpdesk.domain.value_objects import MAX_EVIDENCE_BYTES, VisualEvidence
 from app.shared.infrastructure.event_bus import InMemoryEventBus
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -107,6 +110,24 @@ class TicketCommandService:
         ticket.change_status(
             command.target_status, changed_by=actor.id, reason=command.reason, assignee_id=assignee_id
         )
+        self._tickets.save(ticket)
+        self._session.commit()
+        self._events.publish_all(ticket.pull_events())
+        return ticket
+
+    def route_after_triage(self, ticket_id: uuid.UUID, target: TicketStatus, reason: str) -> Ticket | None:
+        """Mueve el ticket según el resultado del triaje automático (T28). Lo hace el sistema (changed_by=None).
+
+        Si el ticket ya no está en OPEN (por ejemplo, un analista lo tomó a mano), se respeta ese cambio y no se mueve.
+        """
+        ticket = self._tickets.find_by_id(ticket_id)
+        if ticket is None:
+            logger.warning("El triaje terminó para un ticket inexistente: %s", ticket_id)
+            return None
+        if ticket.status is not TicketStatus.OPEN:
+            logger.info("El ticket %s ya está en %s; el triaje no lo mueve", ticket.code, ticket.status.value)
+            return None
+        ticket.change_status(target, changed_by=None, reason=reason)
         self._tickets.save(ticket)
         self._session.commit()
         self._events.publish_all(ticket.pull_events())

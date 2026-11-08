@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     ingestion_worker_enabled: bool = True
     ingestion_workers: int = 2
 
+    # Triaje automático de tickets en segundo plano (T28). Las pruebas lo desactivan para no lanzar hilos.
+    triage_worker_enabled: bool = True
+    triage_workers: int = 1
+
     # Anonimización PII (T27): clave del sello HMAC y modelo de spaCy (vacío = solo expresiones regulares)
     pii_audit_secret: str = "dev-only-pii-secret-cambiar-en-el-env-0123456789"
     pii_spacy_model: str = "es_core_news_sm"

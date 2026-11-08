@@ -17,3 +17,19 @@ class LowConfidenceAlertRaised(DomainEvent):
     best_score: float
     similarity_threshold: float
     fragments_retrieved: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class TriageCompleted(DomainEvent):
+    """El triaje automático de un ticket terminó (T28).
+
+    Helpdesk lo escucha para mover el ticket a `route` (SELF_SERVICE_PROPOSED o PENDING_ASSIGNMENT).
+    """
+
+    diagnosis_id: uuid.UUID
+    ticket_id: uuid.UUID
+    workspace_id: uuid.UUID
+    outcome: str
+    confidence_level: str | None
+    best_score: float | None
+    route: str

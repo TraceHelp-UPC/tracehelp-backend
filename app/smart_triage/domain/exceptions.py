@@ -19,3 +19,7 @@ class IllegibleImageError(DomainValidationError):
 
 class EmptyTriageQueryError(DomainValidationError):
     """No hay texto para buscar en los manuales (HTTP 400)."""
+
+
+class MissingIncidentDataError(DomainValidationError):
+    """No hay descripción ni captura para analizar (HTTP 400)."""

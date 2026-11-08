@@ -22,6 +22,7 @@ class DiagnosisStatus(StrEnum):
     INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"  # no se llamó a la IA: la evidencia no superó el umbral
     MODEL_DECLINED = "MODEL_DECLINED"  # la IA indicó que los fragmentos no responden la consulta
     INVALID_RESPONSE = "INVALID_RESPONSE"  # la IA respondió sin citas válidas o con un formato no aceptado
+    PROVIDER_ERROR = "PROVIDER_ERROR"  # Gemini no respondió (cuota, red o clave faltante); decide un analista
 
 
 @dataclass(frozen=True)

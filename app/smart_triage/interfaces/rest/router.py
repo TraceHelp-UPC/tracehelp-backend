@@ -3,7 +3,10 @@
 Triaje multimodal, diagnóstico RAG y validación HITL.
 Las rutas se montan bajo /api/v1 en app/main.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+import uuid
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
 from app.iam.interfaces.rest.auth_dependencies import CurrentUser
 from app.knowledge.application.ports import EmbeddingProviderError, EmbeddingProviderNotConfiguredError
@@ -14,11 +17,14 @@ from app.smart_triage.application.evidence_retrieval_service import (
     RetrieveEvidenceCommand,
 )
 from app.smart_triage.application.ports import LlmProviderError, LlmProviderNotConfiguredError
+from app.smart_triage.application.triage_analysis_service import AnalyzeIncidentCommand, TriageAnalysisService
 from app.smart_triage.interfaces.rest.dependencies import (
     get_diagnosis_generation_service,
     get_evidence_retrieval_service,
+    get_triage_analysis_service,
 )
 from app.smart_triage.interfaces.rest.schemas import (
+    AnalyzeIncidentResponse,
     DiagnosisPreviewRequest,
     DiagnosisPreviewResponse,
     EvidenceSearchRequest,
@@ -92,3 +98,59 @@ def preview_diagnosis(
     except (EmbeddingProviderError, LlmProviderError) as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"La IA no respondió: {exc}") from exc
     return DiagnosisPreviewResponse.build(evaluation, outcome)
+
+
+MAX_SCREENSHOT_BYTES = 10 * 1024 * 1024
+
+
+@router.post(
+    "/triage/analyze",
+    response_model=AnalyzeIncidentResponse,
+    summary="Analizar un incidente (texto y captura)",
+    responses={
+        400: {"description": "Faltan la descripción y la captura, la imagen no es válida o no se puede leer"},
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "Requiere kb:write o tickets:manage"},
+        404: {"description": "El workspace no existe"},
+        502: {"description": "Gemini no respondió"},
+        503: {"description": "GEMINI_API_KEY no está configurada"},
+    },
+)
+def analyze_incident(
+    workspace_id: Annotated[uuid.UUID, Form(description="Workspace cuyos manuales se consultan")],
+    description: Annotated[str | None, Form(max_length=4000, description="Descripción del problema")] = None,
+    title: Annotated[str | None, Form(max_length=200, description="Asunto (opcional)")] = None,
+    affected_module: Annotated[str | None, Form(max_length=100, description="Sistema afectado (opcional)")] = None,
+    screenshot: Annotated[
+        UploadFile | None, File(description="Captura PNG o JPG del error (opcional)", json_schema_extra={"format": "binary"})
+    ] = None,
+    current_user: CurrentUser = Depends(require_knowledge_reader),
+    service: TriageAnalysisService = Depends(get_triage_analysis_service),
+) -> AnalyzeIncidentResponse:
+    """Orquesta OCR, anonimización, recuperación de evidencia y diagnóstico con Gemini (TS02).
+
+    Devuelve el diagnóstico con citas y el puntaje de confianza, sin crear ni modificar tickets. El triaje automático
+    de los tickets registrados usa este mismo análisis en segundo plano.
+    """
+    if workspace_id != current_user.workspace_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "El workspace no existe.")
+    screenshots: tuple[bytes, ...] = ()
+    if screenshot is not None and screenshot.filename:
+        content = screenshot.file.read(MAX_SCREENSHOT_BYTES + 1)
+        if len(content) > MAX_SCREENSHOT_BYTES:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "La captura supera el tamaño máximo de 10 MB.")
+        screenshots = (content,)
+    command = AnalyzeIncidentCommand(
+        workspace_id=workspace_id,
+        description=description,
+        title=title,
+        affected_module=affected_module,
+        screenshots=screenshots,
+    )
+    try:
+        analysis = service.analyze(command)
+    except (EmbeddingProviderNotConfiguredError, LlmProviderNotConfiguredError) as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "La IA no está disponible: falta GEMINI_API_KEY.") from exc
+    except (EmbeddingProviderError, LlmProviderError) as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"La IA no respondió: {exc}") from exc
+    return AnalyzeIncidentResponse.from_analysis(analysis)

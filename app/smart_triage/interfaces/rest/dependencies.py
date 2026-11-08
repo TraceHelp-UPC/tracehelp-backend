@@ -45,3 +45,13 @@ def build_diagnosis_generation_service() -> DiagnosisGenerationService:
 
 def get_diagnosis_generation_service() -> DiagnosisGenerationService:
     return build_diagnosis_generation_service()
+
+
+def get_triage_analysis_service(
+    retrieval: EvidenceRetrievalService = Depends(get_evidence_retrieval_service),
+    generation: DiagnosisGenerationService = Depends(get_diagnosis_generation_service),
+):
+    from app.smart_triage.application.triage_analysis_service import TriageAnalysisService
+    from app.smart_triage.infrastructure.ocr.tesseract_ocr_adapter import TesseractOcrAdapter
+
+    return TriageAnalysisService(ocr=TesseractOcrAdapter(), retrieval=retrieval, generation=generation)

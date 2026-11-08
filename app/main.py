@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Al arrancar, reanuda las ingestas de manuales que quedaron a medias (T23)."""
+    """Al arrancar, reanuda las ingestas de manuales (T23) y el triaje de tickets (T28) que quedaron a medias."""
     worker = None
     if settings.ingestion_worker_enabled:
         from app.knowledge.infrastructure.ingestion_worker import ingestion_worker as worker
@@ -34,9 +34,19 @@ async def lifespan(_: FastAPI):
             worker.resume_pending()
         except Exception:  # noqa: BLE001 - si la base no responde, la API arranca igual
             logger.exception("No se pudieron reanudar las ingestas pendientes")
+    triage = None
+    if settings.triage_worker_enabled:
+        from app.smart_triage.infrastructure.triage_worker import triage_worker as triage
+
+        try:
+            triage.resume_pending()
+        except Exception:  # noqa: BLE001 - si la base no responde, la API arranca igual
+            logger.exception("No se pudo reanudar el triaje pendiente")
     yield
     if worker is not None:
         worker.shutdown()
+    if triage is not None:
+        triage.shutdown()
 
 
 def create_app() -> FastAPI:

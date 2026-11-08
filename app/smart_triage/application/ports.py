@@ -1,6 +1,7 @@
 """Puertos que la capa de aplicación de Smart Triage necesita de la infraestructura."""
 import uuid
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from app.shared.domain.pii import SanitizedText
@@ -55,3 +56,27 @@ class IDiagnosisGenerator(ABC):
 
         Lanza LlmProviderError si el proveedor falla e InvalidLlmResponseError si la respuesta no tiene el formato pedido.
         """
+
+
+@dataclass(frozen=True)
+class IncidentToTriage:
+    """Datos del ticket que necesita el triaje, leídos desde Helpdesk."""
+
+    ticket_id: uuid.UUID
+    workspace_id: uuid.UUID
+    title: str
+    description: str
+    affected_module: str | None = None
+    screenshots: tuple[bytes, ...] = field(default=(), repr=False)
+
+
+class ITicketReader(ABC):
+    """Acceso de solo lectura a los tickets de Helpdesk (anticorruption layer)."""
+
+    @abstractmethod
+    def get(self, ticket_id: uuid.UUID) -> IncidentToTriage | None:
+        """Ticket con el contenido de sus capturas, o None si no existe."""
+
+    @abstractmethod
+    def find_untriaged_open_ticket_ids(self) -> list[uuid.UUID]:
+        """Tickets en OPEN que todavía no tienen diagnóstico (por ejemplo, si la API se reinició a mitad del triaje)."""
