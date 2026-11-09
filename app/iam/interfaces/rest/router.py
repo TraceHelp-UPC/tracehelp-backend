@@ -4,18 +4,28 @@ Autenticación, usuarios, roles y configuración RAG.
 Las rutas se montan bajo /api/v1 en app/main.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
 
+from app.core.database import get_db
 from app.iam.application.authentication_service import AuthenticationService
-from app.iam.domain.exceptions import InactiveUserError, InvalidCredentialsError, InvalidTokenError
+from app.iam.domain.exceptions import (
+    InactiveUserError,
+    InvalidCredentialsError,
+    InvalidRoleOperationError,
+    InvalidTokenError,
+)
+from app.iam.domain.permissions import Permission
 from app.iam.interfaces.rest.auth_dependencies import CurrentUser, get_current_user
 from app.iam.interfaces.rest.dependencies import get_authentication_service, get_user_repository
 from app.iam.infrastructure.persistence.user_repository import SqlAlchemyUserRepository
 from app.iam.interfaces.rest.schemas import (
     AccessTokenResponse,
+    AnalystSummaryResponse,
     AuthenticatedUser,
     LoginRequest,
     RefreshTokenRequest,
     TokenResponse,
+    UpdateAvailabilityRequest,
 )
 
 router = APIRouter(tags=["IAM"])
@@ -78,3 +88,51 @@ def me(
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "El usuario ya no está habilitado.", headers=_UNAUTHORIZED)
     return AuthenticatedUser.from_domain(user)
+
+
+@router.patch(
+    "/analysts/me/availability",
+    response_model=AnalystSummaryResponse,
+    summary="Cambiar mi estado de disponibilidad",
+    responses={
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "Solo los analistas L1 y especialistas L2 gestionan su disponibilidad"},
+    },
+)
+def update_my_availability(
+    body: UpdateAvailabilityRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    users: SqlAlchemyUserRepository = Depends(get_user_repository),
+    db: Session = Depends(get_db),
+) -> AnalystSummaryResponse:
+    """Actualiza el estado de disponibilidad (AVAILABLE / UNAVAILABLE) del analista o especialista autenticado (US24, T47)."""
+    user = users.find_by_id(current_user.id)
+    if user is None or not user.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "El usuario ya no está habilitado.", headers=_UNAUTHORIZED)
+    try:
+        user.set_availability(body.availability_status)
+    except InvalidRoleOperationError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.detail) from exc
+    users.save(user)
+    db.commit()
+    return AnalystSummaryResponse.from_domain(user)
+
+
+@router.get(
+    "/analysts",
+    response_model=list[AnalystSummaryResponse],
+    summary="Listar analistas y especialistas del workspace",
+    responses={
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "Requiere el permiso tickets:manage o iam:admin"},
+    },
+)
+def list_workspace_analysts(
+    current_user: CurrentUser = Depends(get_current_user),
+    users: SqlAlchemyUserRepository = Depends(get_user_repository),
+) -> list[AnalystSummaryResponse]:
+    """Lista los analistas L1 y especialistas L2 del workspace con su estado de disponibilidad (US24, T47)."""
+    if not (current_user.can(Permission.TICKETS_MANAGE) or current_user.can(Permission.IAM_ADMIN)):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Tu rol no tiene permiso para consultar el equipo de soporte.")
+    staff = users.find_support_staff_by_workspace(current_user.workspace_id)
+    return [AnalystSummaryResponse.from_domain(u) for u in staff if u.is_active]

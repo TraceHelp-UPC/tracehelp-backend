@@ -6,11 +6,12 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from app.helpdesk.application import status_change_policy
-from app.helpdesk.application.ports import IImageProcessor
+from app.helpdesk.application.ports import IAnalystAvailabilityReader, IImageProcessor
 from app.helpdesk.application.status_change_policy import Actor
 from app.helpdesk.domain import state_machine
 from app.helpdesk.domain.enums import ImpactLevel, TicketCategory, TicketPriority, TicketStatus
 from app.helpdesk.domain.exceptions import (
+    InvalidTicketDataError,
     InvalidTicketStateTransitionError,
     InvalidVisualEvidenceError,
     TicketNotFoundError,
@@ -59,6 +60,14 @@ class CorrectTicketClassificationCommand:
     reason: str | None = None
 
 
+@dataclass(frozen=True)
+class AssignTicketCommand:
+    ticket_id: uuid.UUID
+    actor: Actor
+    analyst_id: uuid.UUID | None = None
+    reason: str | None = None
+
+
 class TicketCommandService:
     def __init__(
         self,
@@ -66,11 +75,13 @@ class TicketCommandService:
         tickets: ITicketRepository,
         images: IImageProcessor,
         events: InMemoryEventBus,
+        analysts: IAnalystAvailabilityReader | None = None,
     ) -> None:
         self._session = session
         self._tickets = tickets
         self._images = images
         self._events = events
+        self._analysts = analysts
 
     def register(self, command: RegisterTicketCommand) -> Ticket:
         """Registra un incidente con texto y capturas opcionales (US10, TS04) y publica TicketRegistered."""
@@ -125,6 +136,42 @@ class TicketCommandService:
         ticket.change_status(
             command.target_status, changed_by=actor.id, reason=command.reason, assignee_id=assignee_id
         )
+        self._tickets.save(ticket)
+        self._session.commit()
+        self._events.publish_all(ticket.pull_events())
+        return ticket
+
+    def assign_ticket(self, command: AssignTicketCommand) -> Ticket:
+        """Asigna un ticket a un analista disponible o al propio analista que lo toma (US24, T47)."""
+        actor = command.actor
+        if not (actor.can(Permission.TICKETS_MANAGE) or actor.can(Permission.IAM_ADMIN)):
+            raise TicketStatusChangeForbiddenError("No tienes permiso para asignar tickets.")
+        ticket = self._tickets.find_by_id(command.ticket_id)
+        if ticket is None or ticket.workspace_id != actor.workspace_id:
+            raise TicketNotFoundError("El ticket no existe.")
+
+        target_analyst_id = command.analyst_id or actor.id
+        if self._analysts is not None:
+            candidate = self._analysts.get_candidate(target_analyst_id)
+            if candidate is None or candidate.workspace_id != actor.workspace_id or not candidate.is_active:
+                raise InvalidTicketDataError("El analista indicado no existe en este workspace.")
+            if not candidate.is_support_staff:
+                raise InvalidTicketDataError("Solo se pueden asignar tickets a analistas o especialistas de soporte.")
+            if not candidate.is_available:
+                raise InvalidTicketStateTransitionError(
+                    f"El analista {candidate.full_name} se encuentra UNAVAILABLE y no puede recibir tickets."
+                )
+
+        reason = command.reason or "Asignado a soporte Nivel 1"
+        if ticket.status is TicketStatus.ASSIGNED_L1:
+            ticket.assigned_analyst_id = target_analyst_id
+        else:
+            ticket.change_status(
+                TicketStatus.ASSIGNED_L1,
+                changed_by=actor.id,
+                reason=reason,
+                assignee_id=target_analyst_id,
+            )
         self._tickets.save(ticket)
         self._session.commit()
         self._events.publish_all(ticket.pull_events())

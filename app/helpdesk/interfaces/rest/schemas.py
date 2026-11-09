@@ -89,6 +89,19 @@ class CorrectTicketClassificationRequest(BaseModel):
     )
 
 
+class AssignTicketRequest(BaseModel):
+    analyst_id: uuid.UUID | None = Field(
+        None,
+        description="ID del analista disponible a quien asignar el ticket (si se omite, se asigna al analista autenticado)",
+    )
+    reason: str | None = Field(
+        None,
+        max_length=MAX_REASON_LENGTH,
+        description="Motivo de la asignación",
+        examples=["Asignado a analista disponible"],
+    )
+
+
 class TicketSummaryResponse(BaseModel):
     """Fila de las bandejas W-04 y W-06 (sin descripción ni capturas)."""
 
