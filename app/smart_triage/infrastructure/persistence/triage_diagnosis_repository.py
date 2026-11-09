@@ -19,6 +19,8 @@ _SCALARS = (
     "review_status",
     "summary",
     "model",
+    "suggested_category",
+    "suggested_priority",
     "outcome_reason",
     "reviewed_by",
     "reviewed_at",

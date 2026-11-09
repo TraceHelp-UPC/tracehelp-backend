@@ -12,7 +12,7 @@ from app.helpdesk.application.ticket_query_service import (
     TicketStatusHistoryEntryView,
     TicketStatusHistoryView,
 )
-from app.helpdesk.domain.enums import TicketStatus
+from app.helpdesk.domain.enums import TicketCategory, TicketPriority, TicketStatus
 from app.helpdesk.domain.ticket import MAX_REASON_LENGTH, Ticket
 
 
@@ -32,6 +32,7 @@ class TicketResponse(BaseModel):
     impact_level: str
     status: str
     priority: str
+    category: str | None = None
     current_tier: str
     reporter_id: uuid.UUID
     assigned_analyst_id: uuid.UUID | None
@@ -52,6 +53,7 @@ class TicketResponse(BaseModel):
             impact_level=ticket.impact_level.value,
             status=ticket.status.value,
             priority=ticket.priority.value,
+            category=ticket.category.value if ticket.category else None,
             current_tier=ticket.current_tier.value,
             reporter_id=ticket.reporter_id,
             assigned_analyst_id=ticket.assigned_analyst_id,
@@ -73,6 +75,20 @@ class ChangeTicketStatusRequest(BaseModel):
     )
 
 
+class CorrectTicketClassificationRequest(BaseModel):
+    category: str | None = Field(
+        None,
+        description="Categoría técnica del catálogo: Red/VPN, Correo, Accesos, Hardware, Software u Otro",
+        examples=["Red/VPN"],
+    )
+    priority: TicketPriority | None = Field(
+        None, description="Prioridad del ticket: LOW, MEDIUM, HIGH o CRITICAL", examples=["HIGH"]
+    )
+    reason: str | None = Field(
+        None, max_length=MAX_REASON_LENGTH, description="Motivo de la corrección", examples=["Falla de red corporativa"]
+    )
+
+
 class TicketSummaryResponse(BaseModel):
     """Fila de las bandejas W-04 y W-06 (sin descripción ni capturas)."""
 
@@ -81,6 +97,7 @@ class TicketSummaryResponse(BaseModel):
     title: str
     status: str
     priority: str
+    category: str | None = None
     impact_level: str
     current_tier: str
     affected_module: str | None
@@ -100,6 +117,7 @@ class TicketSummaryResponse(BaseModel):
             title=t.title,
             status=t.status.value,
             priority=t.priority.value,
+            category=t.category,
             impact_level=t.impact_level,
             current_tier=t.current_tier,
             affected_module=t.affected_module,

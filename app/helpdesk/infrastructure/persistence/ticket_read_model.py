@@ -58,6 +58,7 @@ class SqlAlchemyTicketReadModel(ITicketReadModel):
             TicketModel.title,
             TicketModel.status,
             TicketModel.priority,
+            TicketModel.category,
             TicketModel.impact_level,
             TicketModel.current_tier,
             TicketModel.affected_module,
@@ -88,6 +89,7 @@ class SqlAlchemyTicketReadModel(ITicketReadModel):
                 evidence_count=r.evidence_count,
                 created_at=r.created_at,
                 updated_at=r.updated_at,
+                category=r.category.value if r.category else None,
             )
             for r in rows
         ]

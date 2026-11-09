@@ -9,15 +9,17 @@ from app.helpdesk.application import status_change_policy
 from app.helpdesk.application.ports import IImageProcessor
 from app.helpdesk.application.status_change_policy import Actor
 from app.helpdesk.domain import state_machine
-from app.helpdesk.domain.enums import ImpactLevel, TicketStatus
+from app.helpdesk.domain.enums import ImpactLevel, TicketCategory, TicketPriority, TicketStatus
 from app.helpdesk.domain.exceptions import (
     InvalidTicketStateTransitionError,
     InvalidVisualEvidenceError,
     TicketNotFoundError,
+    TicketStatusChangeForbiddenError,
 )
 from app.helpdesk.domain.repositories import ITicketRepository
 from app.helpdesk.domain.ticket import Ticket
 from app.helpdesk.domain.value_objects import MAX_EVIDENCE_BYTES, VisualEvidence
+from app.iam.domain.permissions import Permission
 from app.shared.infrastructure.event_bus import InMemoryEventBus
 
 logger = logging.getLogger(__name__)
@@ -45,6 +47,15 @@ class ChangeTicketStatusCommand:
     ticket_id: uuid.UUID
     actor: Actor
     target_status: TicketStatus
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class CorrectTicketClassificationCommand:
+    ticket_id: uuid.UUID
+    actor: Actor
+    category: TicketCategory | None = None
+    priority: TicketPriority | None = None
     reason: str | None = None
 
 
@@ -119,8 +130,16 @@ class TicketCommandService:
         self._events.publish_all(ticket.pull_events())
         return ticket
 
-    def route_after_triage(self, ticket_id: uuid.UUID, target: TicketStatus, reason: str) -> Ticket | None:
-        """Mueve el ticket según el resultado del triaje automático (T28). Lo hace el sistema (changed_by=None).
+    def route_after_triage(
+        self,
+        ticket_id: uuid.UUID,
+        target: TicketStatus,
+        reason: str,
+        *,
+        suggested_category: TicketCategory | None = None,
+        suggested_priority: TicketPriority | None = None,
+    ) -> Ticket | None:
+        """Mueve el ticket según el resultado del triaje automático (T28) y aplica la clasificación sugerida (T41).
 
         Si el ticket ya no está en OPEN (por ejemplo, un analista lo tomó a mano), se respeta ese cambio y no se mueve.
         """
@@ -131,7 +150,30 @@ class TicketCommandService:
         if ticket.status is not TicketStatus.OPEN:
             logger.info("El ticket %s ya está en %s; el triaje no lo mueve", ticket.code, ticket.status.value)
             return None
+        ticket.apply_triage_classification(
+            suggested_category=suggested_category,
+            suggested_priority=suggested_priority,
+        )
         ticket.change_status(target, changed_by=None, reason=reason)
+        self._tickets.save(ticket)
+        self._session.commit()
+        self._events.publish_all(ticket.pull_events())
+        return ticket
+
+    def correct_classification(self, command: CorrectTicketClassificationCommand) -> Ticket:
+        """Establece o corrige la clasificación del ticket por el analista (US27, T42)."""
+        actor = command.actor
+        if not actor.can(Permission.TICKETS_MANAGE):
+            raise TicketStatusChangeForbiddenError("Solo el equipo de soporte puede clasificar tickets.")
+        ticket = self._tickets.find_by_id(command.ticket_id)
+        if ticket is None or ticket.workspace_id != actor.workspace_id:
+            raise TicketNotFoundError("El ticket no existe.")
+        ticket.correct_classification(
+            corrected_by=actor.id,
+            category=command.category,
+            priority=command.priority,
+            reason=command.reason,
+        )
         self._tickets.save(ticket)
         self._session.commit()
         self._events.publish_all(ticket.pull_events())

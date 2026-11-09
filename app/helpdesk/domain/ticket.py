@@ -3,9 +3,9 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from app.helpdesk.domain.enums import ImpactLevel, SupportTier, TicketPriority, TicketStatus
+from app.helpdesk.domain.enums import ImpactLevel, SupportTier, TicketCategory, TicketPriority, TicketStatus
 from app.helpdesk.domain import state_machine
-from app.helpdesk.domain.events import TicketRegistered, TicketStatusChanged
+from app.helpdesk.domain.events import TicketClassificationCorrected, TicketRegistered, TicketStatusChanged
 from app.helpdesk.domain.exceptions import InvalidTicketDataError
 from app.helpdesk.domain.value_objects import VisualEvidence
 from app.shared.domain.aggregate_root import AggregateRoot
@@ -70,6 +70,7 @@ class Ticket(AggregateRoot):
         status: TicketStatus,
         priority: TicketPriority,
         current_tier: SupportTier,
+        category: TicketCategory | None = None,
         number: int | None = None,
         assigned_analyst_id: uuid.UUID | None = None,
         evidences: list[VisualEvidence] | None = None,
@@ -91,6 +92,7 @@ class Ticket(AggregateRoot):
         self.status = status
         self.priority = priority
         self.current_tier = current_tier
+        self.category = category
         self.number = number
         self.assigned_analyst_id = assigned_analyst_id
         self.evidences = list(evidences or [])
@@ -234,5 +236,55 @@ class Ticket(AggregateRoot):
                 new_status=target.value,
                 changed_by=changed_by,
                 reason=reason,
+            )
+        )
+
+    def apply_triage_classification(
+        self,
+        *,
+        suggested_category: TicketCategory | None = None,
+        suggested_priority: TicketPriority | None = None,
+    ) -> None:
+        """Aplica la categoría y prioridad sugeridas por el triaje automático (US27, T41)."""
+        if suggested_category is not None:
+            self.category = suggested_category
+        if suggested_priority is not None:
+            self.priority = suggested_priority
+        self.updated_at = _now()
+
+    def correct_classification(
+        self,
+        *,
+        corrected_by: uuid.UUID,
+        category: TicketCategory | None = None,
+        priority: TicketPriority | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """Establece o corrige la clasificación del ticket por un analista y emite TicketClassificationCorrected (T42)."""
+        if category is None and priority is None:
+            raise InvalidTicketDataError("Indica la categoría o la prioridad a corregir.")
+        clean_reason = (reason or "").strip() or None
+        if clean_reason and len(clean_reason) > MAX_REASON_LENGTH:
+            raise InvalidTicketDataError(f"El motivo no puede superar los {MAX_REASON_LENGTH} caracteres.")
+
+        prev_category = self.category.value if self.category else None
+        prev_priority = self.priority.value
+
+        if category is not None:
+            self.category = category
+        if priority is not None:
+            self.priority = priority
+        self.updated_at = _now()
+
+        self.record_event(
+            TicketClassificationCorrected(
+                ticket_id=self.id,
+                workspace_id=self.workspace_id,
+                corrected_by=corrected_by,
+                previous_category=prev_category,
+                new_category=self.category.value if self.category else None,
+                previous_priority=prev_priority,
+                new_priority=self.priority.value,
+                reason=clean_reason,
             )
         )

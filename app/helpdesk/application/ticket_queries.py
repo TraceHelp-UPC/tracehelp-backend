@@ -69,6 +69,7 @@ class TicketSummary:
     evidence_count: int
     created_at: datetime
     updated_at: datetime
+    category: str | None = None
 
     @property
     def code(self) -> str:

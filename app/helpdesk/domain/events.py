@@ -26,3 +26,17 @@ class TicketStatusChanged(DomainEvent):
     new_status: str
     changed_by: uuid.UUID | None
     reason: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class TicketClassificationCorrected(DomainEvent):
+    """Se emite cuando un analista establece o corrige la categoría o prioridad del ticket (US27, T42)."""
+
+    ticket_id: uuid.UUID
+    workspace_id: uuid.UUID
+    corrected_by: uuid.UUID
+    previous_category: str | None
+    new_category: str | None
+    previous_priority: str
+    new_priority: str
+    reason: str | None = None
