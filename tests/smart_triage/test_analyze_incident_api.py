@@ -111,5 +111,5 @@ def test_automatic_triage_is_wired_to_ticket_registration(monkeypatch):
     monkeypatch.setattr(get_settings(), "ingestion_worker_enabled", False)
     bus = InMemoryEventBus()
     register_event_handlers(bus)
-    assert len(bus.handlers_for(TicketRegistered)) == 1
-    assert len(bus.handlers_for(TriageCompleted)) == 1
+    assert any(getattr(h, "__name__", "") == "on_ticket_registered" for h in bus.handlers_for(TicketRegistered))
+    assert any(type(h).__name__ == "TriageRoutingHandler" for h in bus.handlers_for(TriageCompleted))
