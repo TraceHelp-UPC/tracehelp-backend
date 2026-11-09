@@ -6,7 +6,12 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.helpdesk.application.ticket_queries import EvidenceFile, TicketSummary
-from app.helpdesk.application.ticket_query_service import TicketDetail, TicketListing
+from app.helpdesk.application.ticket_query_service import (
+    TicketDetail,
+    TicketListing,
+    TicketStatusHistoryEntryView,
+    TicketStatusHistoryView,
+)
 from app.helpdesk.domain.enums import TicketStatus
 from app.helpdesk.domain.ticket import MAX_REASON_LENGTH, Ticket
 
@@ -187,4 +192,40 @@ class EvidenceContentResponse(BaseModel):
             mime_type=evidence.mime_type,
             size_bytes=len(evidence.content),
             data_url=f"data:{evidence.mime_type};base64,{encoded}",
+        )
+
+
+class TicketStatusHistoryEntryResponse(BaseModel):
+    id: uuid.UUID
+    ticket_id: uuid.UUID
+    previous_status: str
+    new_status: str
+    changed_by: uuid.UUID | None
+    changed_by_name: str
+    reason: str | None
+    changed_at: datetime
+
+    @classmethod
+    def from_view(cls, item: TicketStatusHistoryEntryView) -> "TicketStatusHistoryEntryResponse":
+        return cls(
+            id=item.id,
+            ticket_id=item.ticket_id,
+            previous_status=item.previous_status,
+            new_status=item.new_status,
+            changed_by=item.changed_by,
+            changed_by_name=item.changed_by_name,
+            reason=item.reason,
+            changed_at=item.changed_at,
+        )
+
+
+class TicketStatusHistoryResponse(BaseModel):
+    ticket_id: uuid.UUID
+    items: list[TicketStatusHistoryEntryResponse]
+
+    @classmethod
+    def from_view(cls, view: TicketStatusHistoryView) -> "TicketStatusHistoryResponse":
+        return cls(
+            ticket_id=view.ticket_id,
+            items=[TicketStatusHistoryEntryResponse.from_view(i) for i in view.items],
         )

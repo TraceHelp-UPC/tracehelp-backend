@@ -31,6 +31,7 @@ from app.helpdesk.interfaces.rest.schemas import (
     TicketDetailResponse,
     TicketPageResponse,
     TicketResponse,
+    TicketStatusHistoryResponse,
 )
 from app.iam.domain.permissions import Permission
 from app.iam.interfaces.rest.auth_dependencies import CurrentUser, get_current_user, require_permission
@@ -241,3 +242,22 @@ def get_ticket_evidence(
 ) -> EvidenceContentResponse:
     """Devuelve la captura como data URL para mostrarla en un widget Image de Appsmith."""
     return EvidenceContentResponse.from_file(service.evidence(_actor(current_user), ticket_id, evidence_id))
+
+
+@router.get(
+    "/tickets/{ticket_id}/history",
+    response_model=TicketStatusHistoryResponse,
+    summary="Historial de cambios de estado del ticket",
+    responses={
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "El ticket es de otro colaborador"},
+        404: {"description": "El ticket no existe"},
+    },
+)
+def get_ticket_status_history(
+    ticket_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: TicketQueryService = Depends(get_ticket_query_service),
+) -> TicketStatusHistoryResponse:
+    """Devuelve la línea de tiempo cronológica de cambios de estado del ticket (US14, T45)."""
+    return TicketStatusHistoryResponse.from_view(service.history(_actor(current_user), ticket_id))
