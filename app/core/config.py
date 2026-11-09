@@ -43,8 +43,8 @@ class Settings(BaseSettings):
     pii_spacy_model: str = "es_core_news_sm"
 
     # Recuperación y evaluación de evidencia (T30). Los umbrales se calibran en T33.
-    similarity_threshold: float = 0.70  # mínimo para usar un fragmento como fuente de la respuesta
-    self_service_threshold: float = 0.85  # mínimo para proponer autoservicio al colaborador
+    similarity_threshold: float = 0.68  # mínimo para usar un fragmento como fuente de la respuesta
+    self_service_threshold: float = 0.80  # mínimo para proponer autoservicio al colaborador
     retrieval_top_k: int = 5  # fragmentos que se recuperan por consulta
 
     # Notificaciones

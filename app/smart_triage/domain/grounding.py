@@ -13,8 +13,8 @@ from enum import StrEnum
 
 from app.shared.domain.exceptions import DomainError
 
-DEFAULT_SIMILARITY_THRESHOLD = 0.70
-DEFAULT_SELF_SERVICE_THRESHOLD = 0.85
+DEFAULT_SIMILARITY_THRESHOLD = 0.68
+DEFAULT_SELF_SERVICE_THRESHOLD = 0.80
 
 
 class InvalidGroundingConfigurationError(DomainError):
