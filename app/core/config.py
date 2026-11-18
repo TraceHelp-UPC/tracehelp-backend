@@ -10,7 +10,7 @@ class Settings(BaseSettings):
 
     # Aplicación
     app_name: str = "TraceHelp API"
-    app_version: str = "0.1.0"
+    app_version: str = "1.0.0"
     environment: str = "development" 
     api_prefix: str = "/api/v1"
     cors_origins: list[str] = ["*"]
@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     # Inteligencia artificial (Google Gemini)
     gemini_api_key: str = ""
-    llm_model: str = "gemini-2.5-flash-lite"
+    llm_model: str = "gemini-3.5-flash-lite"
     embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = 768
 
@@ -34,13 +34,17 @@ class Settings(BaseSettings):
     ingestion_worker_enabled: bool = True
     ingestion_workers: int = 2
 
+    # Triaje automático de tickets en segundo plano (T28). Las pruebas lo desactivan para no lanzar hilos.
+    triage_worker_enabled: bool = True
+    triage_workers: int = 1
+
     # Anonimización PII (T27): clave del sello HMAC y modelo de spaCy (vacío = solo expresiones regulares)
     pii_audit_secret: str = "dev-only-pii-secret-cambiar-en-el-env-0123456789"
     pii_spacy_model: str = "es_core_news_sm"
 
     # Recuperación y evaluación de evidencia (T30). Los umbrales se calibran en T33.
-    similarity_threshold: float = 0.70  # mínimo para usar un fragmento como fuente de la respuesta
-    self_service_threshold: float = 0.85  # mínimo para proponer autoservicio al colaborador
+    similarity_threshold: float = 0.68  # mínimo para usar un fragmento como fuente de la respuesta
+    self_service_threshold: float = 0.80  # mínimo para proponer autoservicio al colaborador
     retrieval_top_k: int = 5  # fragmentos que se recuperan por consulta
 
     # Notificaciones

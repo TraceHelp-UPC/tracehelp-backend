@@ -3,9 +3,9 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from app.helpdesk.domain.enums import ImpactLevel, SupportTier, TicketPriority, TicketStatus
+from app.helpdesk.domain.enums import ImpactLevel, SupportTier, TicketCategory, TicketPriority, TicketStatus
 from app.helpdesk.domain import state_machine
-from app.helpdesk.domain.events import TicketRegistered, TicketStatusChanged
+from app.helpdesk.domain.events import TicketClassificationCorrected, TicketRegistered, TicketStatusChanged
 from app.helpdesk.domain.exceptions import InvalidTicketDataError
 from app.helpdesk.domain.value_objects import VisualEvidence
 from app.shared.domain.aggregate_root import AggregateRoot
@@ -42,6 +42,18 @@ class TicketComment:
             raise InvalidTicketDataError("El comentario no puede estar vacío.")
 
 
+@dataclass(frozen=True)
+class TicketStatusChange:
+    """Entrada del historial cronológico de cambios de estado de un ticket (US14, T45)."""
+
+    previous_status: TicketStatus
+    new_status: TicketStatus
+    changed_by: uuid.UUID | None
+    reason: str | None = None
+    id: uuid.UUID = field(default_factory=uuid.uuid4)
+    changed_at: datetime = field(default_factory=_now)
+
+
 class Ticket(AggregateRoot):
     """Agregado raíz del ciclo de vida del incidente."""
 
@@ -58,10 +70,12 @@ class Ticket(AggregateRoot):
         status: TicketStatus,
         priority: TicketPriority,
         current_tier: SupportTier,
+        category: TicketCategory | None = None,
         number: int | None = None,
         assigned_analyst_id: uuid.UUID | None = None,
         evidences: list[VisualEvidence] | None = None,
         comments: list[TicketComment] | None = None,
+        status_history: list[TicketStatusChange] | None = None,
         created_at: datetime | None = None,
         updated_at: datetime | None = None,
         resolved_at: datetime | None = None,
@@ -78,10 +92,12 @@ class Ticket(AggregateRoot):
         self.status = status
         self.priority = priority
         self.current_tier = current_tier
+        self.category = category
         self.number = number
         self.assigned_analyst_id = assigned_analyst_id
         self.evidences = list(evidences or [])
         self.comments = list(comments or [])
+        self.status_history = list(status_history or [])
         self.created_at = created_at or _now()
         self.updated_at = updated_at or self.created_at
         self.resolved_at = resolved_at
@@ -202,6 +218,15 @@ class Ticket(AggregateRoot):
         self.status = target
         self.current_tier = state_machine.TIER_BY_STATUS.get(target, self.current_tier)
         self.updated_at = now
+        self.status_history.append(
+            TicketStatusChange(
+                previous_status=previous,
+                new_status=target,
+                changed_by=changed_by,
+                reason=reason,
+                changed_at=now,
+            )
+        )
         self.record_event(
             TicketStatusChanged(
                 ticket_id=self.id,
@@ -211,5 +236,55 @@ class Ticket(AggregateRoot):
                 new_status=target.value,
                 changed_by=changed_by,
                 reason=reason,
+            )
+        )
+
+    def apply_triage_classification(
+        self,
+        *,
+        suggested_category: TicketCategory | None = None,
+        suggested_priority: TicketPriority | None = None,
+    ) -> None:
+        """Aplica la categoría y prioridad sugeridas por el triaje automático (US27, T41)."""
+        if suggested_category is not None:
+            self.category = suggested_category
+        if suggested_priority is not None:
+            self.priority = suggested_priority
+        self.updated_at = _now()
+
+    def correct_classification(
+        self,
+        *,
+        corrected_by: uuid.UUID,
+        category: TicketCategory | None = None,
+        priority: TicketPriority | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """Establece o corrige la clasificación del ticket por un analista y emite TicketClassificationCorrected (T42)."""
+        if category is None and priority is None:
+            raise InvalidTicketDataError("Indica la categoría o la prioridad a corregir.")
+        clean_reason = (reason or "").strip() or None
+        if clean_reason and len(clean_reason) > MAX_REASON_LENGTH:
+            raise InvalidTicketDataError(f"El motivo no puede superar los {MAX_REASON_LENGTH} caracteres.")
+
+        prev_category = self.category.value if self.category else None
+        prev_priority = self.priority.value
+
+        if category is not None:
+            self.category = category
+        if priority is not None:
+            self.priority = priority
+        self.updated_at = _now()
+
+        self.record_event(
+            TicketClassificationCorrected(
+                ticket_id=self.id,
+                workspace_id=self.workspace_id,
+                corrected_by=corrected_by,
+                previous_category=prev_category,
+                new_category=self.category.value if self.category else None,
+                previous_priority=prev_priority,
+                new_priority=self.priority.value,
+                reason=clean_reason,
             )
         )

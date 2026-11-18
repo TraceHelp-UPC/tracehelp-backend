@@ -32,6 +32,7 @@ def before_all(context):
     # La aplicación lee DATABASE_URL al importarse, por eso se fija antes de importar app.main
     os.environ["DATABASE_URL"] = test_url
     os.environ["INGESTION_WORKER_ENABLED"] = "false"
+    os.environ["TRIAGE_WORKER_ENABLED"] = "false"
     from app.core.config import Settings, get_settings
 
     get_settings.cache_clear()
@@ -52,7 +53,10 @@ def before_all(context):
 
 
 def before_scenario(context, scenario):
+    import contextlib
+
     from app.core.database import get_db
+    from app.core.event_handlers import analytics_audit_handler
 
     context.connection = context.engine.connect()
     context.transaction = context.connection.begin()
@@ -61,11 +65,16 @@ def before_scenario(context, scenario):
     def _override_get_db():
         yield context.session
 
+    context._original_audit_factory = analytics_audit_handler._session_factory
+    analytics_audit_handler._session_factory = lambda: contextlib.nullcontext(context.session)
     context.app.dependency_overrides[get_db] = _override_get_db
     context.response = None
 
 
 def after_scenario(context, scenario):
+    from app.core.event_handlers import analytics_audit_handler
+
+    analytics_audit_handler._session_factory = getattr(context, "_original_audit_factory", analytics_audit_handler._session_factory)
     context.app.dependency_overrides.clear()
     context.session.close()
     context.transaction.rollback()

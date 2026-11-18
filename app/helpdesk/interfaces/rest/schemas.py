@@ -6,8 +6,13 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.helpdesk.application.ticket_queries import EvidenceFile, TicketSummary
-from app.helpdesk.application.ticket_query_service import TicketDetail, TicketListing
-from app.helpdesk.domain.enums import TicketStatus
+from app.helpdesk.application.ticket_query_service import (
+    TicketDetail,
+    TicketListing,
+    TicketStatusHistoryEntryView,
+    TicketStatusHistoryView,
+)
+from app.helpdesk.domain.enums import TicketCategory, TicketPriority, TicketStatus
 from app.helpdesk.domain.ticket import MAX_REASON_LENGTH, Ticket
 
 
@@ -27,6 +32,7 @@ class TicketResponse(BaseModel):
     impact_level: str
     status: str
     priority: str
+    category: str | None = None
     current_tier: str
     reporter_id: uuid.UUID
     assigned_analyst_id: uuid.UUID | None
@@ -47,6 +53,7 @@ class TicketResponse(BaseModel):
             impact_level=ticket.impact_level.value,
             status=ticket.status.value,
             priority=ticket.priority.value,
+            category=ticket.category.value if ticket.category else None,
             current_tier=ticket.current_tier.value,
             reporter_id=ticket.reporter_id,
             assigned_analyst_id=ticket.assigned_analyst_id,
@@ -68,6 +75,33 @@ class ChangeTicketStatusRequest(BaseModel):
     )
 
 
+class CorrectTicketClassificationRequest(BaseModel):
+    category: str | None = Field(
+        None,
+        description="Categoría técnica del catálogo: Red/VPN, Correo, Accesos, Hardware, Software u Otro",
+        examples=["Red/VPN"],
+    )
+    priority: TicketPriority | None = Field(
+        None, description="Prioridad del ticket: LOW, MEDIUM, HIGH o CRITICAL", examples=["HIGH"]
+    )
+    reason: str | None = Field(
+        None, max_length=MAX_REASON_LENGTH, description="Motivo de la corrección", examples=["Falla de red corporativa"]
+    )
+
+
+class AssignTicketRequest(BaseModel):
+    analyst_id: uuid.UUID | None = Field(
+        None,
+        description="ID del analista disponible a quien asignar el ticket (si se omite, se asigna al analista autenticado)",
+    )
+    reason: str | None = Field(
+        None,
+        max_length=MAX_REASON_LENGTH,
+        description="Motivo de la asignación",
+        examples=["Asignado a analista disponible"],
+    )
+
+
 class TicketSummaryResponse(BaseModel):
     """Fila de las bandejas W-04 y W-06 (sin descripción ni capturas)."""
 
@@ -76,6 +110,7 @@ class TicketSummaryResponse(BaseModel):
     title: str
     status: str
     priority: str
+    category: str | None = None
     impact_level: str
     current_tier: str
     affected_module: str | None
@@ -95,6 +130,7 @@ class TicketSummaryResponse(BaseModel):
             title=t.title,
             status=t.status.value,
             priority=t.priority.value,
+            category=t.category,
             impact_level=t.impact_level,
             current_tier=t.current_tier,
             affected_module=t.affected_module,
@@ -187,4 +223,40 @@ class EvidenceContentResponse(BaseModel):
             mime_type=evidence.mime_type,
             size_bytes=len(evidence.content),
             data_url=f"data:{evidence.mime_type};base64,{encoded}",
+        )
+
+
+class TicketStatusHistoryEntryResponse(BaseModel):
+    id: uuid.UUID
+    ticket_id: uuid.UUID
+    previous_status: str
+    new_status: str
+    changed_by: uuid.UUID | None
+    changed_by_name: str
+    reason: str | None
+    changed_at: datetime
+
+    @classmethod
+    def from_view(cls, item: TicketStatusHistoryEntryView) -> "TicketStatusHistoryEntryResponse":
+        return cls(
+            id=item.id,
+            ticket_id=item.ticket_id,
+            previous_status=item.previous_status,
+            new_status=item.new_status,
+            changed_by=item.changed_by,
+            changed_by_name=item.changed_by_name,
+            reason=item.reason,
+            changed_at=item.changed_at,
+        )
+
+
+class TicketStatusHistoryResponse(BaseModel):
+    ticket_id: uuid.UUID
+    items: list[TicketStatusHistoryEntryResponse]
+
+    @classmethod
+    def from_view(cls, view: TicketStatusHistoryView) -> "TicketStatusHistoryResponse":
+        return cls(
+            ticket_id=view.ticket_id,
+            items=[TicketStatusHistoryEntryResponse.from_view(i) for i in view.items],
         )

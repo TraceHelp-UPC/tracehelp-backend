@@ -22,6 +22,17 @@ class TicketPriority(StrEnum):
     CRITICAL = "CRITICAL"
 
 
+class TicketCategory(StrEnum):
+    """Catálogo cerrado de categorías técnicas de soporte (US27)."""
+
+    NETWORK_VPN = "Red/VPN"
+    EMAIL = "Correo"
+    ACCESS = "Accesos"
+    HARDWARE = "Hardware"
+    SOFTWARE = "Software"
+    OTHER = "Otro"
+
+
 class ImpactLevel(StrEnum):
     """Nivel de impacto declarado por el colaborador en el formulario W-02."""
 

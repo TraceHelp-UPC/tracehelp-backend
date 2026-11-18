@@ -17,7 +17,11 @@ def get_ticket_command_service(
     bus: InMemoryEventBus = Depends(get_event_bus),
 ) -> TicketCommandService:
     return TicketCommandService(
-        session=db, tickets=SqlAlchemyTicketRepository(db), images=PillowImageProcessor(), events=bus
+        session=db,
+        tickets=SqlAlchemyTicketRepository(db),
+        images=PillowImageProcessor(),
+        events=bus,
+        analysts=IamUserDirectory(db),
     )
 
 

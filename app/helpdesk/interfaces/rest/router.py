@@ -10,14 +10,16 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 
 from app.helpdesk.application.status_change_policy import Actor
 from app.helpdesk.application.ticket_command_service import (
+    AssignTicketCommand,
     ChangeTicketStatusCommand,
+    CorrectTicketClassificationCommand,
     RegisterTicketCommand,
     TicketCommandService,
     UploadedFile,
 )
 from app.helpdesk.application.ticket_queries import QueueScope
 from app.helpdesk.application.ticket_query_service import TicketQueryService
-from app.helpdesk.domain.enums import ImpactLevel, TicketPriority, TicketStatus
+from app.helpdesk.domain.enums import ImpactLevel, TicketCategory, TicketPriority, TicketStatus
 from app.helpdesk.domain.ticket import MAX_EVIDENCES
 from app.helpdesk.interfaces.rest.dependencies import get_ticket_command_service, get_ticket_query_service
 from app.helpdesk.domain.exceptions import (
@@ -26,11 +28,14 @@ from app.helpdesk.domain.exceptions import (
     TicketStatusChangeForbiddenError,
 )
 from app.helpdesk.interfaces.rest.schemas import (
+    AssignTicketRequest,
     ChangeTicketStatusRequest,
+    CorrectTicketClassificationRequest,
     EvidenceContentResponse,
     TicketDetailResponse,
     TicketPageResponse,
     TicketResponse,
+    TicketStatusHistoryResponse,
 )
 from app.iam.domain.permissions import Permission
 from app.iam.interfaces.rest.auth_dependencies import CurrentUser, get_current_user, require_permission
@@ -132,6 +137,91 @@ def change_ticket_status(
         raise HTTPException(422, exc.detail) from exc
     except TicketStatusChangeForbiddenError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, exc.detail) from exc
+    except DomainValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.detail) from exc
+    return TicketResponse.from_domain(ticket)
+
+
+@router.patch(
+    "/tickets/{ticket_id}/classification",
+    response_model=TicketResponse,
+    summary="Establecer o corregir la categoría y prioridad del ticket",
+    responses={
+        400: {"description": "Categoría fuera del catálogo o datos inválidos"},
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "Requiere el permiso tickets:manage"},
+        404: {"description": "El ticket no existe"},
+    },
+)
+def correct_ticket_classification(
+    ticket_id: uuid.UUID,
+    body: CorrectTicketClassificationRequest,
+    current_user: CurrentUser = Depends(require_permission(Permission.TICKETS_MANAGE)),
+    service: TicketCommandService = Depends(get_ticket_command_service),
+) -> TicketResponse:
+    """Permite al analista establecer o corregir la categoría técnica y prioridad del ticket (US27, T42)."""
+    parsed_category: TicketCategory | None = None
+    if body.category is not None:
+        try:
+            parsed_category = TicketCategory(body.category.strip())
+        except ValueError as exc:
+            valid = ", ".join(c.value for c in TicketCategory)
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Categoría inválida '{body.category}'. Las categorías permitidas son: {valid}.",
+            ) from exc
+
+    command = CorrectTicketClassificationCommand(
+        ticket_id=ticket_id,
+        actor=Actor(id=current_user.id, workspace_id=current_user.workspace_id, permissions=current_user.permissions),
+        category=parsed_category,
+        priority=body.priority,
+        reason=body.reason,
+    )
+    try:
+        ticket = service.correct_classification(command)
+    except TicketNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.detail) from exc
+    except TicketStatusChangeForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.detail) from exc
+    except DomainValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.detail) from exc
+    return TicketResponse.from_domain(ticket)
+
+
+@router.post(
+    "/tickets/{ticket_id}/assign",
+    response_model=TicketResponse,
+    summary="Asignar un ticket a un analista disponible",
+    responses={
+        400: {"description": "El analista indicado no existe o no es personal de soporte"},
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "El usuario no tiene permiso para asignar tickets"},
+        404: {"description": "El ticket no existe"},
+        422: {"description": "El analista se encuentra UNAVAILABLE o el ticket no puede asignarse"},
+    },
+)
+def assign_ticket(
+    ticket_id: uuid.UUID,
+    body: AssignTicketRequest = AssignTicketRequest(),
+    current_user: CurrentUser = Depends(get_current_user),
+    service: TicketCommandService = Depends(get_ticket_command_service),
+) -> TicketResponse:
+    """Asigna el ticket a un analista disponible (AVAILABLE) y lo pasa a ASSIGNED_L1 (US24, T47)."""
+    command = AssignTicketCommand(
+        ticket_id=ticket_id,
+        actor=Actor(id=current_user.id, workspace_id=current_user.workspace_id, permissions=current_user.permissions),
+        analyst_id=body.analyst_id,
+        reason=body.reason,
+    )
+    try:
+        ticket = service.assign_ticket(command)
+    except TicketNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, exc.detail) from exc
+    except TicketStatusChangeForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.detail) from exc
+    except InvalidTicketStateTransitionError as exc:
+        raise HTTPException(422, exc.detail) from exc
     except DomainValidationError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.detail) from exc
     return TicketResponse.from_domain(ticket)
@@ -241,3 +331,22 @@ def get_ticket_evidence(
 ) -> EvidenceContentResponse:
     """Devuelve la captura como data URL para mostrarla en un widget Image de Appsmith."""
     return EvidenceContentResponse.from_file(service.evidence(_actor(current_user), ticket_id, evidence_id))
+
+
+@router.get(
+    "/tickets/{ticket_id}/history",
+    response_model=TicketStatusHistoryResponse,
+    summary="Historial de cambios de estado del ticket",
+    responses={
+        401: {"description": "Token ausente o inválido"},
+        403: {"description": "El ticket es de otro colaborador"},
+        404: {"description": "El ticket no existe"},
+    },
+)
+def get_ticket_status_history(
+    ticket_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: TicketQueryService = Depends(get_ticket_query_service),
+) -> TicketStatusHistoryResponse:
+    """Devuelve la línea de tiempo cronológica de cambios de estado del ticket (US14, T45)."""
+    return TicketStatusHistoryResponse.from_view(service.history(_actor(current_user), ticket_id))

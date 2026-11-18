@@ -85,8 +85,6 @@ Feature: Analyst ticket queue
     When the "COLLABORATOR" opens the "unassigned" queue
     Then the response status is 403
 
-  # Requiere T47 (PATCH /analysts/me/availability). Quitar @wip cuando exista el endpoint.
-  @wip
   Scenario: Analyst changes their availability
     When the "ANALYST_L1" changes their availability to "UNAVAILABLE"
     Then the response status is 200

@@ -115,3 +115,23 @@ def step_ticket_assigned(context, title, name):
     assert match, f'"{title}" no aparece en la bandeja'
     assert match[0]["assigned_analyst_id"] == str(_user(context, name).id)
     assert match[0]["status"] == "ASSIGNED_L1"
+
+
+@when('the "{name}" changes their availability to "{availability}"')
+def step_change_availability(context, name, availability):
+    context.response = context.client.patch(
+        "/api/v1/analysts/me/availability",
+        json={"availability_status": availability},
+        headers=_headers(context, name),
+    )
+
+
+@then('the "{name}" appears as "{availability}"')
+def step_analyst_appears_as(context, name, availability):
+    assert context.response.status_code == 200, context.response.text
+    assert context.response.json()["availability_status"] == availability
+    analysts_resp = context.client.get("/api/v1/analysts", headers=_headers(context, name))
+    assert analysts_resp.status_code == 200, analysts_resp.text
+    target_id = str(_user(context, name).id)
+    found = [a for a in analysts_resp.json() if a["id"] == target_id]
+    assert found and found[0]["availability_status"] == availability, found

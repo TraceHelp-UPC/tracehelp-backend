@@ -4,8 +4,9 @@ import uuid
 from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
+from app.iam.domain.enums import RoleName
 from app.iam.domain.repositories import IUserRepository
-from app.iam.domain.user import User
+from app.iam.domain.user import SUPPORT_ROLES, User
 from app.iam.domain.value_objects import EmailAddress, PasswordHash
 from app.iam.infrastructure.persistence.models import UserModel
 
@@ -49,6 +50,14 @@ class SqlAlchemyUserRepository(IUserRepository):
 
     def exists_by_email(self, email: EmailAddress) -> bool:
         return bool(self._session.scalar(select(exists().where(UserModel.email == email.value))))
+
+    def find_support_staff_by_workspace(self, workspace_id: uuid.UUID) -> list[User]:
+        stmt = (
+            select(UserModel)
+            .where(UserModel.workspace_id == workspace_id, UserModel.role.in_(SUPPORT_ROLES))
+            .order_by(UserModel.full_name.asc())
+        )
+        return [self._to_domain(m) for m in self._session.scalars(stmt).all()]
 
     @staticmethod
     def _to_domain(model: UserModel) -> User:
