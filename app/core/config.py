@@ -10,7 +10,7 @@ class Settings(BaseSettings):
 
     # Aplicación
     app_name: str = "TraceHelp API"
-    app_version: str = "0.1.0"
+    app_version: str = "1.0.0"
     environment: str = "development" 
     api_prefix: str = "/api/v1"
     cors_origins: list[str] = ["*"]
