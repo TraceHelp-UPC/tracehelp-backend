@@ -2,10 +2,11 @@
 import base64
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from app.helpdesk.application.notifications.notification_service import NotificationListing
 from app.helpdesk.application.ports import SelfServiceRecommendation
 from app.helpdesk.application.ticket_queries import EvidenceFile, MessageView, TicketSummary
 from app.helpdesk.application.ticket_query_service import (
@@ -16,6 +17,7 @@ from app.helpdesk.application.ticket_query_service import (
     TicketStatusHistoryView,
 )
 from app.helpdesk.domain.enums import TicketCategory, TicketPriority, TicketStatus
+from app.helpdesk.domain.notification import Notification, NotificationType
 from app.helpdesk.domain.ticket import MAX_MESSAGE_LENGTH, MAX_REASON_LENGTH, Ticket
 from app.shared.domain.specialist_group import SpecialistGroup
 
@@ -473,4 +475,58 @@ class MessagePageResponse(BaseModel):
             size=page.size,
             total=page.total,
             total_pages=page.total_pages,
+        )
+
+
+class NotificationResponse(BaseModel):
+    id: uuid.UUID
+    type: NotificationType
+    ticket_id: uuid.UUID
+    ticket_code: str = Field(..., examples=["TK-0042"])
+    title: str = Field(..., examples=["TK-0042: tu ticket está Resuelto"])
+    body: str = Field(
+        ...,
+        examples=["Tu ticket TK-0042 cambió de «En atención» a «Resuelto». Revisa la solución y confírmala."],
+    )
+    data: dict[str, Any]
+    read: bool = Field(..., description="true si ya fue marcada como leída")
+    read_at: datetime | None
+    created_at: datetime
+
+    @classmethod
+    def from_domain(cls, notification: Notification) -> "NotificationResponse":
+        return cls(
+            id=notification.id,
+            type=notification.type,
+            ticket_id=notification.ticket_id,
+            ticket_code=notification.ticket_code,
+            title=notification.title,
+            body=notification.body,
+            data=dict(notification.data),
+            read=notification.is_read,
+            read_at=notification.read_at,
+            created_at=notification.created_at,
+        )
+
+
+class NotificationPageResponse(BaseModel):
+    items: list[NotificationResponse]
+    page: int = Field(..., examples=[1])
+    size: int = Field(..., examples=[20])
+    total: int = Field(..., examples=[3])
+    total_pages: int = Field(..., examples=[1])
+    unread_count: int = Field(
+        ..., description="Total global de notificaciones no leídas del usuario sin importar el filtro o página", examples=[2]
+    )
+
+    @classmethod
+    def from_listing(cls, listing: NotificationListing) -> "NotificationPageResponse":
+        page = listing.page
+        return cls(
+            items=[NotificationResponse.from_domain(n) for n in page.items],
+            page=page.page,
+            size=page.size,
+            total=page.total,
+            total_pages=page.total_pages,
+            unread_count=listing.unread_count,
         )

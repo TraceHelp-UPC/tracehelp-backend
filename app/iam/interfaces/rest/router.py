@@ -25,10 +25,13 @@ from app.iam.interfaces.rest.schemas import (
     AnalystSummaryResponse,
     AuthenticatedUser,
     LoginRequest,
+    NotificationPreferencesResponse,
     RefreshTokenRequest,
     TokenResponse,
     UpdateAvailabilityRequest,
+    UpdateNotificationPreferencesRequest,
 )
+from app.shared.infrastructure.event_bus import InMemoryEventBus, get_event_bus
 
 router = APIRouter(tags=["IAM"])
 router.include_router(users_router)
@@ -140,3 +143,58 @@ def list_workspace_analysts(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Tu rol no tiene permiso para consultar el equipo de soporte.")
     staff = users.find_support_staff_by_workspace(current_user.workspace_id)
     return [AnalystSummaryResponse.from_domain(u) for u in staff if u.is_active]
+
+
+@router.get(
+    "/users/me/notification-preferences",
+    response_model=NotificationPreferencesResponse,
+    summary="Consultar mis preferencias de notificación",
+    responses={
+        200: {"content": {"application/json": {"example": {"notify_inapp": True, "notify_email": True}}}},
+        401: {"description": "Token ausente, inválido o usuario deshabilitado"},
+    },
+)
+def get_my_notification_preferences(
+    current_user: CurrentUser = Depends(get_current_user),
+    users: SqlAlchemyUserRepository = Depends(get_user_repository),
+) -> NotificationPreferencesResponse:
+    """Devuelve los canales de notificación habilitados del usuario autenticado (US19, T91)."""
+    user = users.find_by_id(current_user.id)
+    if user is None or not user.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "El usuario ya no está habilitado.", headers=_UNAUTHORIZED)
+    return NotificationPreferencesResponse.from_domain(user)
+
+
+@router.patch(
+    "/users/me/notification-preferences",
+    response_model=NotificationPreferencesResponse,
+    summary="Actualizar mis preferencias de notificación",
+    responses={
+        200: {"content": {"application/json": {"example": {"notify_inapp": True, "notify_email": False}}}},
+        401: {"description": "Token ausente, inválido o usuario deshabilitado"},
+        422: {"description": "Cuerpo vacío, campo desconocido o valor no booleano"},
+    },
+)
+def update_my_notification_preferences(
+    body: UpdateNotificationPreferencesRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    users: SqlAlchemyUserRepository = Depends(get_user_repository),
+    db: Session = Depends(get_db),
+    bus: InMemoryEventBus = Depends(get_event_bus),
+) -> NotificationPreferencesResponse:
+    """Activa o desactiva las notificaciones in-app y por correo del usuario autenticado (US19, T91).
+
+    Si al menos un canal cambia, publica UserProfileUpdated para la bitácora de auditoría.
+    """
+    user = users.find_by_id(current_user.id)
+    if user is None or not user.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "El usuario ya no está habilitado.", headers=_UNAUTHORIZED)
+    user.update_notification_preferences(
+        notify_inapp=body.notify_inapp,
+        notify_email=body.notify_email,
+        changed_by=user.id,
+    )
+    users.save(user)
+    db.commit()
+    bus.publish_all(user.pull_events())
+    return NotificationPreferencesResponse.from_domain(user)

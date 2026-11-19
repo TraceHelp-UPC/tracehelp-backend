@@ -27,6 +27,7 @@ from app.helpdesk.application.ticket_query_service import TicketQueryService
 from app.helpdesk.domain.enums import ImpactLevel, TicketCategory, TicketPriority, TicketStatus
 from app.helpdesk.domain.ticket import MAX_EVIDENCES
 from app.helpdesk.interfaces.rest.dependencies import get_ticket_command_service, get_ticket_query_service
+from app.helpdesk.interfaces.rest.notifications_router import router as notifications_router
 from app.helpdesk.domain.exceptions import (
     InvalidTicketStateTransitionError,
     TicketNotFoundError,
@@ -54,6 +55,7 @@ from app.shared.domain.exceptions import DomainValidationError
 from app.shared.domain.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, PageRequest
 
 router = APIRouter(tags=["Helpdesk"])
+router.include_router(notifications_router)
 
 
 @router.post(

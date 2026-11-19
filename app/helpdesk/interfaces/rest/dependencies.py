@@ -3,10 +3,12 @@ from fastapi import Depends
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.helpdesk.application.notifications.notification_service import NotificationService
 from app.helpdesk.application.ticket_command_service import TicketCommandService
 from app.helpdesk.application.ticket_query_service import TicketQueryService
 from app.helpdesk.infrastructure.iam_user_directory import IamUserDirectory
 from app.helpdesk.infrastructure.image_processor import PillowImageProcessor
+from app.helpdesk.infrastructure.persistence.notification_repository import SqlAlchemyNotificationRepository
 from app.helpdesk.infrastructure.persistence.self_service_recommendation_reader import (
     SqlAlchemySelfServiceRecommendationReader,
 )
@@ -38,3 +40,7 @@ def get_ticket_query_service(db: Session = Depends(get_db)) -> TicketQueryServic
         users=IamUserDirectory(db),
         self_service_reader=SqlAlchemySelfServiceRecommendationReader(db),
     )
+
+
+def get_notification_service(db: Session = Depends(get_db)) -> NotificationService:
+    return NotificationService(session=db, notifications=SqlAlchemyNotificationRepository(db))
