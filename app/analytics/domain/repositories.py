@@ -12,6 +12,7 @@ class AuditLogFilter:
     workspace_id: uuid.UUID
     event_type: str | None = None
     ticket_id: uuid.UUID | None = None
+    actor_id: uuid.UUID | None = None
     from_date: datetime | None = None
     to_date: datetime | None = None
 

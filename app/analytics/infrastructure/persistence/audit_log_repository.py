@@ -34,6 +34,8 @@ class SqlAlchemyAuditLogRepository(IAuditLogRepository):
             stmt = stmt.where(AuditLogModel.event_type == criteria.event_type)
         if criteria.ticket_id is not None:
             stmt = stmt.where(AuditLogModel.ticket_id == criteria.ticket_id)
+        if criteria.actor_id is not None:
+            stmt = stmt.where(AuditLogModel.actor_id == criteria.actor_id)
         if criteria.from_date is not None:
             stmt = stmt.where(AuditLogModel.occurred_at >= criteria.from_date)
         if criteria.to_date is not None:
