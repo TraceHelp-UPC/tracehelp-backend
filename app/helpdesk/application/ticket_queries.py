@@ -84,10 +84,28 @@ class EvidenceFile:
     content: bytes
 
 
+@dataclass(frozen=True)
+class MessageView:
+    """Mensaje del hilo del ticket tal como se lee de la base (US26)."""
+
+    id: uuid.UUID
+    ticket_id: uuid.UUID
+    author_id: uuid.UUID
+    content: str
+    is_internal_note: bool
+    is_ai_generated: bool
+    created_at: datetime
+
+
 class ITicketReadModel(ABC):
     @abstractmethod
     def search(self, criteria: TicketSearchCriteria, page: PageRequest) -> Page[TicketSummary]:
         """Devuelve la página pedida y el total de tickets que cumplen los filtros."""
+
+    @abstractmethod
+    def messages(self, ticket_id: uuid.UUID, include_internal: bool, page: PageRequest) -> Page[MessageView]:
+        """Mensajes del ticket en orden cronológico ascendente. Sin include_internal, las notas internas se
+        excluyen en SQL, así que tampoco cuentan en el total."""
 
     @abstractmethod
     def get_evidence(self, ticket_id: uuid.UUID, evidence_id: uuid.UUID) -> EvidenceFile | None:

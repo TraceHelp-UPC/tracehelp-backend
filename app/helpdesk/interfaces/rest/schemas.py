@@ -2,18 +2,20 @@
 import base64
 import uuid
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from app.helpdesk.application.ticket_queries import EvidenceFile, TicketSummary
+from app.helpdesk.application.ticket_queries import EvidenceFile, MessageView, TicketSummary
 from app.helpdesk.application.ticket_query_service import (
+    MessageListing,
     TicketDetail,
     TicketListing,
     TicketStatusHistoryEntryView,
     TicketStatusHistoryView,
 )
 from app.helpdesk.domain.enums import TicketCategory, TicketPriority, TicketStatus
-from app.helpdesk.domain.ticket import MAX_REASON_LENGTH, Ticket
+from app.helpdesk.domain.ticket import MAX_MESSAGE_LENGTH, MAX_REASON_LENGTH, Ticket
 
 
 class EvidenceResponse(BaseModel):
@@ -259,4 +261,71 @@ class TicketStatusHistoryResponse(BaseModel):
         return cls(
             ticket_id=view.ticket_id,
             items=[TicketStatusHistoryEntryResponse.from_view(i) for i in view.items],
+        )
+
+
+class PostMessageRequest(BaseModel):
+    """Mensaje nuevo en la conversación del ticket (US26)."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {"content": "Adjunto: el error aparece solo cuando estoy en la VPN.", "is_internal_note": False},
+                {"content": "Revisar el perfil del usuario antes de escalar.", "is_internal_note": True},
+            ]
+        },
+    )
+
+    content: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_MESSAGE_LENGTH),
+    ] = Field(..., description=f"Texto del mensaje, de 1 a {MAX_MESSAGE_LENGTH} caracteres (sin contar los espacios de los extremos)")
+    is_internal_note: bool = Field(
+        False, description="true marca una nota interna visible solo para soporte; el colaborador recibe 403"
+    )
+
+
+class MessageResponse(BaseModel):
+    id: uuid.UUID
+    ticket_id: uuid.UUID
+    author_id: uuid.UUID
+    author_name: str | None
+    from_reporter: bool = Field(..., description="true si lo escribió quien reportó el ticket (para alinear burbujas)")
+    content: str
+    is_internal_note: bool
+    is_ai_generated: bool
+    created_at: datetime
+
+    @classmethod
+    def from_view(cls, m: MessageView, *, reporter_id: uuid.UUID, names: dict[uuid.UUID, str]) -> "MessageResponse":
+        return cls(
+            id=m.id,
+            ticket_id=m.ticket_id,
+            author_id=m.author_id,
+            author_name=names.get(m.author_id),
+            from_reporter=m.author_id == reporter_id,
+            content=m.content,
+            is_internal_note=m.is_internal_note,
+            is_ai_generated=m.is_ai_generated,
+            created_at=m.created_at,
+        )
+
+
+class MessagePageResponse(BaseModel):
+    items: list[MessageResponse]
+    page: int = Field(..., examples=[1])
+    size: int = Field(..., examples=[50])
+    total: int = Field(..., description="Mensajes visibles para el usuario (sin notas internas si no es soporte)", examples=[2])
+    total_pages: int = Field(..., examples=[1])
+
+    @classmethod
+    def from_listing(cls, listing: MessageListing) -> "MessagePageResponse":
+        page = listing.page
+        return cls(
+            items=[MessageResponse.from_view(m, reporter_id=listing.reporter_id, names=listing.names) for m in page.items],
+            page=page.page,
+            size=page.size,
+            total=page.total,
+            total_pages=page.total_pages,
         )

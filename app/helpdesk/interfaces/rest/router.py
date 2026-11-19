@@ -13,6 +13,7 @@ from app.helpdesk.application.ticket_command_service import (
     AssignTicketCommand,
     ChangeTicketStatusCommand,
     CorrectTicketClassificationCommand,
+    PostMessageCommand,
     RegisterTicketCommand,
     TicketCommandService,
     UploadedFile,
@@ -32,6 +33,9 @@ from app.helpdesk.interfaces.rest.schemas import (
     ChangeTicketStatusRequest,
     CorrectTicketClassificationRequest,
     EvidenceContentResponse,
+    MessagePageResponse,
+    MessageResponse,
+    PostMessageRequest,
     TicketDetailResponse,
     TicketPageResponse,
     TicketResponse,
@@ -350,3 +354,134 @@ def get_ticket_status_history(
 ) -> TicketStatusHistoryResponse:
     """Devuelve la línea de tiempo cronológica de cambios de estado del ticket (US14, T45)."""
     return TicketStatusHistoryResponse.from_view(service.history(_actor(current_user), ticket_id))
+
+
+# --- Conversación del ticket (US26) ---------------------------------------------------------------------------
+
+MESSAGES_DEFAULT_PAGE_SIZE = 50
+_TICKET_ID_EXAMPLE = "6f1c2a3b-8d4e-4f10-9a7b-2c3d4e5f6a7b"
+
+
+def _problem(status_code: int, slug: str, title: str, detail: str) -> dict:
+    return {
+        "description": title,
+        "content": {
+            "application/problem+json": {
+                "example": {
+                    "type": f"urn:tracehelp:problems:{slug}",
+                    "title": title,
+                    "status": status_code,
+                    "detail": detail,
+                    "instance": f"/api/v1/tickets/{_TICKET_ID_EXAMPLE}/messages",
+                }
+            }
+        },
+    }
+
+
+_MESSAGE_EXAMPLE = {
+    "id": "c3d4e5f6-1111-4aaa-8bbb-222233334444",
+    "ticket_id": _TICKET_ID_EXAMPLE,
+    "author_id": "1a2b3c4d-0000-4000-8000-000000000001",
+    "author_name": "Carlos Mendoza",
+    "from_reporter": True,
+    "content": "Adjunto: el error aparece solo cuando estoy en la VPN.",
+    "is_internal_note": False,
+    "is_ai_generated": False,
+    "created_at": "2026-11-20T13:20:41Z",
+}
+
+
+@router.post(
+    "/tickets/{ticket_id}/messages",
+    response_model=MessageResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Enviar un mensaje en el ticket",
+    responses={
+        201: {"content": {"application/json": {"example": _MESSAGE_EXAMPLE}}},
+        401: {"description": "Token ausente o inválido"},
+        403: _problem(403, "internal-note-not-allowed", "Acceso denegado", "Solo el equipo de soporte puede registrar notas internas."),
+        404: _problem(404, "ticket-not-found", "Recurso no encontrado", "El ticket no existe."),
+        409: _problem(409, "ticket-closed", "Conflicto con el estado actual", "El ticket TK-0042 está cerrado y ya no admite mensajes."),
+        422: {
+            "description": "Mensaje vacío, de solo espacios o de más de 2000 caracteres",
+            "content": {
+                "application/problem+json": {
+                    "example": {
+                        "type": "urn:tracehelp:problems:validation-error",
+                        "title": "Datos de entrada no válidos",
+                        "status": 422,
+                        "detail": "Hay datos no válidos en la solicitud. content: no puede superar los 2000 caracteres.",
+                        "instance": f"/api/v1/tickets/{_TICKET_ID_EXAMPLE}/messages",
+                        "errors": [{"field": "content", "message": "no puede superar los 2000 caracteres", "type": "string_too_long"}],
+                    }
+                }
+            },
+        },
+    },
+)
+def post_ticket_message(
+    ticket_id: uuid.UUID,
+    body: PostMessageRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: TicketCommandService = Depends(get_ticket_command_service),
+) -> MessageResponse:
+    """Escribe un mensaje en la conversación del ticket (US26). Lo usan W-05 (colaborador) y W-07 (soporte).
+
+    Pueden escribir quien reportó el ticket y el equipo de soporte (tickets:manage) del mismo workspace, en
+    cualquier estado salvo CLOSED. Solo el soporte puede marcar `is_internal_note`: la nota interna nunca
+    la ve el colaborador. El texto se guarda tal cual; el evento MessagePosted no lo incluye.
+    """
+    posted = service.post_message(
+        PostMessageCommand(
+            ticket_id=ticket_id,
+            actor=_actor(current_user),
+            content=body.content,
+            is_internal_note=body.is_internal_note,
+        )
+    )
+    comment = posted.comment
+    return MessageResponse(
+        id=comment.id,
+        ticket_id=posted.ticket_id,
+        author_id=comment.author_id,
+        author_name=posted.author_name,
+        from_reporter=posted.from_reporter,
+        content=comment.content,
+        is_internal_note=comment.is_internal_note,
+        is_ai_generated=comment.is_ai_generated,
+        created_at=comment.created_at,
+    )
+
+
+@router.get(
+    "/tickets/{ticket_id}/messages",
+    response_model=MessagePageResponse,
+    summary="Conversación del ticket",
+    responses={
+        200: {
+            "content": {
+                "application/json": {
+                    "example": {"items": [_MESSAGE_EXAMPLE], "page": 1, "size": 50, "total": 1, "total_pages": 1}
+                }
+            }
+        },
+        400: _problem(400, "invalid-page-request", "Solicitud no válida", "La página 3 no existe: hay 1 página(s) de 50 resultados."),
+        401: {"description": "Token ausente o inválido"},
+        403: _problem(403, "ticket-access-denied", "Acceso denegado", "No tienes acceso a este ticket: solo lo ven quien lo reportó y el equipo de soporte."),
+        404: _problem(404, "ticket-not-found", "Recurso no encontrado", "El ticket no existe."),
+    },
+)
+def get_ticket_messages(
+    ticket_id: uuid.UUID,
+    page: PageNumber = 1,
+    size: Annotated[int, Query(description=f"Mensajes por página, de 1 a {MAX_PAGE_SIZE}")] = MESSAGES_DEFAULT_PAGE_SIZE,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: TicketQueryService = Depends(get_ticket_query_service),
+) -> MessagePageResponse:
+    """Mensajes del ticket en orden cronológico (el más antiguo primero), paginados (US26, W-05 y W-07).
+
+    Las notas internas solo las ve el equipo de soporte; para el colaborador se excluyen también del total.
+    """
+    listing = service.messages(_actor(current_user), ticket_id, PageRequest(page=page, size=size))
+    return MessagePageResponse.from_listing(listing)

@@ -8,6 +8,7 @@ from app.helpdesk.application.ticket_queries import (
     EvidenceFile,
     ITicketReadModel,
     IUserDirectory,
+    MessageView,
     QueueScope,
     TicketOrder,
     TicketSearchCriteria,
@@ -53,6 +54,16 @@ class TicketStatusHistoryEntryView:
 class TicketStatusHistoryView:
     ticket_id: uuid.UUID
     items: list[TicketStatusHistoryEntryView]
+
+
+@dataclass(frozen=True)
+class MessageListing:
+    """Una página de mensajes del hilo con los nombres de los autores."""
+
+    ticket_id: uuid.UUID
+    reporter_id: uuid.UUID
+    page: Page[MessageView]
+    names: dict[uuid.UUID, str]
 
 
 def _clean_search(search: str | None) -> str | None:
@@ -148,6 +159,16 @@ class TicketQueryService:
             for h in entries
         ]
         return TicketStatusHistoryView(ticket_id=ticket.id, items=items)
+
+    def messages(self, actor: Actor, ticket_id: uuid.UUID, page: PageRequest = PageRequest(size=50)) -> MessageListing:
+        """Hilo de mensajes del ticket (US26), del más antiguo al más reciente.
+
+        Misma visibilidad que el detalle. Las notas internas solo las ve el soporte y se filtran en SQL.
+        """
+        ticket = self._visible_ticket(actor, ticket_id)
+        result = self._read_model.messages(ticket.id, actor.is_support_staff, page)
+        names = self._users.display_names({m.author_id for m in result.items})
+        return MessageListing(ticket_id=ticket.id, reporter_id=ticket.reporter_id, page=result, names=names)
 
     def _visible_ticket(self, actor: Actor, ticket_id: uuid.UUID) -> Ticket:
         ticket = self._tickets.find_by_id(ticket_id)
