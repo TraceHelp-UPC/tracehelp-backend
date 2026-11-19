@@ -14,9 +14,11 @@ from app.helpdesk.application.ticket_command_service import (
     AssignTicketCommand,
     ChangeTicketStatusCommand,
     CorrectTicketClassificationCommand,
+    EscalateTicketCommand,
     PostMessageCommand,
     RegisterTicketCommand,
     RejectSelfServiceCommand,
+    ReturnToL1Command,
     TicketCommandService,
     UploadedFile,
 )
@@ -34,11 +36,13 @@ from app.helpdesk.interfaces.rest.schemas import (
     AssignTicketRequest,
     ChangeTicketStatusRequest,
     CorrectTicketClassificationRequest,
+    EscalateTicketRequest,
     EvidenceContentResponse,
     MessagePageResponse,
     MessageResponse,
     PostMessageRequest,
     RejectSelfServiceRequest,
+    ReturnToL1Request,
     TicketDetailResponse,
     TicketPageResponse,
     TicketResponse,
@@ -367,7 +371,14 @@ MESSAGES_DEFAULT_PAGE_SIZE = 50
 _TICKET_ID_EXAMPLE = "6f1c2a3b-8d4e-4f10-9a7b-2c3d4e5f6a7b"
 
 
-def _problem(status_code: int, slug: str, title: str, detail: str, description: str | None = None) -> dict:
+def _problem(
+    status_code: int,
+    slug: str,
+    title: str,
+    detail: str,
+    description: str | None = None,
+    instance_suffix: str = "messages",
+) -> dict:
     return {
         "description": description or title,
         "content": {
@@ -377,7 +388,7 @@ def _problem(status_code: int, slug: str, title: str, detail: str, description: 
                     "title": title,
                     "status": status_code,
                     "detail": detail,
-                    "instance": f"/api/v1/tickets/{_TICKET_ID_EXAMPLE}/messages",
+                    "instance": f"/api/v1/tickets/{_TICKET_ID_EXAMPLE}/{instance_suffix}",
                 }
             }
         },
@@ -534,6 +545,10 @@ _SELF_SERVICE_TICKET_ACCEPTED_EXAMPLE = {
     "current_tier": "SELF_SERVICE",
     "reporter_id": "1a2b3c4d-0000-4000-8000-000000000001",
     "assigned_analyst_id": None,
+    "escalated_group": None,
+    "escalated_at": None,
+    "assigned_specialist_id": None,
+    "specialist_claimed_at": None,
     "created_at": "2026-11-20T13:15:00Z",
     "updated_at": "2026-11-20T13:18:10Z",
     "resolved_at": "2026-11-20T13:18:10Z",
@@ -647,6 +662,161 @@ def reject_self_service(
             ticket_id=ticket_id,
             actor=_actor(current_user),
             reason=body.reason if body else None,
+        )
+    )
+    return TicketResponse.from_domain(ticket)
+
+
+# --- Escalamiento a Nivel 2 y devolución a Nivel 1 (US17) -----------------------------------------------------
+
+_ESCALATED_TICKET_EXAMPLE = {
+    "id": _TICKET_ID_EXAMPLE,
+    "code": "TK-0042",
+    "title": "VPN error 809 al conectar desde casa",
+    "description": "Al conectar a la VPN aparece el código 809.",
+    "affected_module": "VPN corporativa",
+    "impact_level": "MEDIUM",
+    "status": "ESCALATED_L2",
+    "priority": "HIGH",
+    "category": "Red/VPN",
+    "current_tier": "TIER_L2",
+    "reporter_id": "1a2b3c4d-0000-4000-8000-000000000001",
+    "assigned_analyst_id": "1a2b3c4d-0000-4000-8000-000000000002",
+    "escalated_group": "REDES",
+    "escalated_at": "2026-11-20T15:02:11Z",
+    "assigned_specialist_id": None,
+    "specialist_claimed_at": None,
+    "created_at": "2026-11-20T13:10:00Z",
+    "updated_at": "2026-11-20T15:02:11Z",
+    "resolved_at": None,
+    "closed_at": None,
+    "evidences": [],
+}
+
+_RETURNED_TICKET_EXAMPLE = {
+    **_ESCALATED_TICKET_EXAMPLE,
+    "status": "ASSIGNED_L1",
+    "current_tier": "TIER_L1",
+    "updated_at": "2026-11-20T15:35:00Z",
+}
+
+
+@router.post(
+    "/tickets/{ticket_id}/escalate",
+    response_model=TicketResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Escalar un ticket a Soporte Nivel 2",
+    responses={
+        200: {"content": {"application/json": {"example": _ESCALATED_TICKET_EXAMPLE}}},
+        401: {"description": "Token ausente o inválido"},
+        403: _problem(
+            403,
+            "forbidden",
+            "Acceso denegado",
+            "No tienes permiso para realizar esta acción.",
+            description="El rol no posee el permiso tickets:escalate",
+            instance_suffix="escalate",
+        ),
+        404: _problem(
+            404,
+            "ticket-not-found",
+            "Recurso no encontrado",
+            "El ticket no existe.",
+            instance_suffix="escalate",
+        ),
+        422: _problem(
+            422,
+            "invalid-ticket-state-transition",
+            "Regla de negocio incumplida",
+            "No se puede cambiar el ticket de PENDING_ASSIGNMENT a ESCALATED_L2. Desde PENDING_ASSIGNMENT solo se puede pasar a: ASSIGNED_L1.",
+            description="El ticket no está en ASSIGNED_L1, o el grupo especialista/motivo es inválido (validation-error)",
+            instance_suffix="escalate",
+        ),
+    },
+)
+def escalate_ticket(
+    ticket_id: uuid.UUID,
+    body: EscalateTicketRequest,
+    current_user: CurrentUser = Depends(require_permission(Permission.TICKETS_ESCALATE)),
+    service: TicketCommandService = Depends(get_ticket_command_service),
+) -> TicketResponse:
+    """Deriva un ticket en ASSIGNED_L1 al grupo especialista Nivel 2 indicado (US17, T79).
+
+    Conserva al analista L1 original (`assigned_analyst_id`) para permitir devoluciones posteriores, limpia
+    cualquier reclamo L2 previo y registra automáticamente un snapshot de contexto (clasificación, triaje IA,
+    OCR anonimizado y fuentes citadas) como nota interna visible solo para soporte. Publica `TicketStatusChanged`
+    y `TicketEscalated`.
+    """
+    ticket = service.escalate(
+        EscalateTicketCommand(
+            ticket_id=ticket_id,
+            actor=_actor(current_user),
+            specialist_group=body.specialist_group,
+            reason=body.reason,
+        )
+    )
+    return TicketResponse.from_domain(ticket)
+
+
+@router.post(
+    "/tickets/{ticket_id}/return-to-l1",
+    response_model=TicketResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Devolver un ticket escalado a Soporte Nivel 1",
+    responses={
+        200: {"content": {"application/json": {"example": _RETURNED_TICKET_EXAMPLE}}},
+        400: _problem(
+            400,
+            "invalid-ticket-data",
+            "Solicitud no válida",
+            "El ticket no tiene un analista L1 original asignado para devolverlo.",
+            description="Ticket legado en ESCALATED_L2 sin analista L1 original asignado",
+            instance_suffix="return-to-l1",
+        ),
+        401: {"description": "Token ausente o inválido"},
+        403: _problem(
+            403,
+            "ticket-status-change-forbidden",
+            "Acceso denegado",
+            "El ticket está escalado al grupo REDES.",
+            description="Sin permiso tickets:resolve_escalated o especialista de otro grupo",
+            instance_suffix="return-to-l1",
+        ),
+        404: _problem(
+            404,
+            "ticket-not-found",
+            "Recurso no encontrado",
+            "El ticket no existe.",
+            instance_suffix="return-to-l1",
+        ),
+        422: _problem(
+            422,
+            "invalid-ticket-state-transition",
+            "Regla de negocio incumplida",
+            "Solo se pueden devolver a Nivel 1 los tickets en estado ESCALATED_L2 (estado actual: ASSIGNED_L1).",
+            description="El ticket no está en ESCALATED_L2 o requested_info es inválido (validation-error)",
+            instance_suffix="return-to-l1",
+        ),
+    },
+)
+def return_ticket_to_l1(
+    ticket_id: uuid.UUID,
+    body: ReturnToL1Request,
+    current_user: CurrentUser = Depends(require_permission(Permission.TICKETS_RESOLVE_ESCALATED)),
+    service: TicketCommandService = Depends(get_ticket_command_service),
+) -> TicketResponse:
+    """Devuelve un ticket en ESCALATED_L2 al analista L1 original solicitando información adicional (US17, T79).
+
+    Aplica la guarda `ensure_can_work_escalated` (permiso `tickets:resolve_escalated` y coincidencia de grupo;
+    si el ticket tiene `escalated_group = null` cualquier L2 puede devolverlo). Limpia el reclamo L2, conserva
+    `escalated_group` y `escalated_at` (historial y cálculo de FCR), registra la solicitud como nota interna y
+    publica `TicketStatusChanged` + `TicketReturnedToL1`.
+    """
+    ticket = service.return_to_l1(
+        ReturnToL1Command(
+            ticket_id=ticket_id,
+            actor=_actor(current_user),
+            requested_info=body.requested_info,
         )
     )
     return TicketResponse.from_domain(ticket)

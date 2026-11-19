@@ -11,6 +11,7 @@ from app.helpdesk.domain.enums import TicketStatus
 from app.helpdesk.domain.exceptions import TicketStatusChangeForbiddenError
 from app.helpdesk.domain.ticket import Ticket
 from app.iam.domain.permissions import Permission
+from app.shared.domain.specialist_group import SpecialistGroup
 
 S = TicketStatus
 REPORTER = "reporter"  # solo el colaborador que reportó el incidente
@@ -66,3 +67,27 @@ def authorize(actor: Actor, ticket: Ticket, target: TicketStatus) -> None:
         return
     if not actor.can(rule):
         raise TicketStatusChangeForbiddenError(f"Tu rol no tiene el permiso requerido: {rule.value}.")
+
+
+def ensure_can_work_escalated(
+    actor: Actor,
+    ticket: Ticket,
+    actor_group: SpecialistGroup | None,
+) -> None:
+    """Guarda única para operar sobre un ticket en ESCALATED_L2 (D20, D30).
+
+    Orden de guardas (US25 §2.2):
+    1. El actor tiene `tickets:resolve_escalated` → si no, 403.
+    2. `ticket.escalated_group` es None o coincide con `actor_group` → si no, 403.
+    3. [Punto de extensión para T82]: reclamo individual (`assigned_specialist_id` es None o
+       coincide con `actor.id` → si no, 409 `TicketClaimedByAnotherSpecialistError`).
+    """
+    if not actor.can(Permission.TICKETS_RESOLVE_ESCALATED):
+        raise TicketStatusChangeForbiddenError(
+            f"Tu rol no tiene el permiso requerido: {Permission.TICKETS_RESOLVE_ESCALATED.value}."
+        )
+    if ticket.escalated_group is not None and actor_group != ticket.escalated_group:
+        raise TicketStatusChangeForbiddenError(
+            f"El ticket está escalado al grupo {ticket.escalated_group.value}."
+        )
+    # Punto de extensión para T82 (guarda 3, D20): validar reclamo por otro especialista (409).

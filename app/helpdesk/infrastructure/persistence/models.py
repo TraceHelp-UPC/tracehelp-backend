@@ -11,6 +11,7 @@ from sqlalchemy.orm import Mapped, deferred, mapped_column, relationship
 
 from app.core.database import Base
 from app.helpdesk.domain.enums import ImpactLevel, SupportTier, TicketCategory, TicketPriority, TicketStatus
+from app.shared.domain.specialist_group import SpecialistGroup
 
 
 def _enum(enum_cls, name: str) -> Enum:
@@ -30,6 +31,8 @@ class TicketModel(Base):
     __table_args__ = (
         Index("ix_helpdesk_tickets_workspace_id_status", "workspace_id", "status"),
         Index("ix_helpdesk_tickets_assigned_analyst_id", "assigned_analyst_id"),
+        Index("ix_helpdesk_tickets_assigned_specialist_id", "assigned_specialist_id"),
+        Index("ix_helpdesk_tickets_workspace_escalated_group", "workspace_id", "escalated_group"),
         Index("ix_helpdesk_tickets_reporter_id", "reporter_id"),
         Index("ix_helpdesk_tickets_created_at", "created_at"),
     )
@@ -39,6 +42,14 @@ class TicketModel(Base):
     workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("iam_workspaces.id"), nullable=False)
     reporter_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("iam_users.id"), nullable=False)
     assigned_analyst_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("iam_users.id"), nullable=True)
+    escalated_group: Mapped[SpecialistGroup | None] = mapped_column(
+        _enum(SpecialistGroup, "escalated_group"), nullable=True
+    )
+    escalated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    assigned_specialist_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("iam_users.id", name="fk_helpdesk_tickets_assigned_specialist_id"), nullable=True
+    )
+    specialist_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     affected_module: Mapped[str | None] = mapped_column(String(100), nullable=True)

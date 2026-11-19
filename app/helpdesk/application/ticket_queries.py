@@ -12,6 +12,7 @@ from enum import StrEnum
 
 from app.helpdesk.domain.enums import TicketPriority, TicketStatus
 from app.shared.domain.pagination import Page, PageRequest
+from app.shared.domain.specialist_group import SpecialistGroup
 
 S = TicketStatus
 
@@ -113,8 +114,12 @@ class ITicketReadModel(ABC):
 
 
 class IUserDirectory(ABC):
-    """Nombres visibles de los usuarios (los provee IAM)."""
+    """Nombres visibles y grupo especialista de los usuarios (los provee IAM)."""
 
     @abstractmethod
     def display_names(self, user_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, str]:
         """Nombre completo por id; los ids desconocidos no aparecen en el resultado."""
+
+    @abstractmethod
+    def specialist_group(self, user_id: uuid.UUID) -> SpecialistGroup | None:
+        """Grupo especialista L2 del usuario, o None si no tiene grupo o no existe."""

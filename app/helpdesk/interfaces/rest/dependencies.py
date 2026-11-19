@@ -12,6 +12,7 @@ from app.helpdesk.infrastructure.persistence.self_service_recommendation_reader 
 )
 from app.helpdesk.infrastructure.persistence.ticket_read_model import SqlAlchemyTicketReadModel
 from app.helpdesk.infrastructure.persistence.ticket_repository import SqlAlchemyTicketRepository
+from app.helpdesk.infrastructure.persistence.triage_context_reader import SqlAlchemyTriageContextReader
 from app.shared.infrastructure.event_bus import InMemoryEventBus, get_event_bus
 
 
@@ -26,6 +27,7 @@ def get_ticket_command_service(
         events=bus,
         analysts=IamUserDirectory(db),
         users=IamUserDirectory(db),
+        triage_context=SqlAlchemyTriageContextReader(db),
     )
 
 
