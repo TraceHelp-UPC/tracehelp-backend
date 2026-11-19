@@ -184,3 +184,23 @@ def test_evidence_retrieval_uses_saved_workspace_settings_without_restarting(db_
     assert diagnosis.review_status is ReviewStatus.PENDING_REVIEW
     assert diagnosis.route is TicketRoute.PENDING_ASSIGNMENT
     assert diagnosis.sources == ()
+
+
+def test_workspace_settings_are_isolated_between_workspaces(db_session, workspace_and_users):
+    workspace_a, _, _ = workspace_and_users
+    workspace_b = WorkspaceModel(id=uuid.uuid4(), name="Other WS", subdomain=f"other-{uuid.uuid4().hex[:6]}")
+    db_session.add(workspace_b)
+    db_session.flush()
+    leader_a = _leader(db_session, workspace_a.id)
+
+    repo = SqlAlchemyWorkspaceSettingsRepository(db_session)
+    cache = WorkspaceSettingsCache(ttl_seconds=60.0)
+    reader = WorkspaceSettingsReader(repo, cache=cache, defaults=DEFAULTS)
+
+    settings_a = WorkspaceSettings.empty(workspace_a.id)
+    settings_a.update_rag(RagSettings(0.75, 0.90, 9, False), changed_by=leader_a.id, defaults=DEFAULTS)
+    repo.save(settings_a)
+    cache.invalidate(workspace_a.id)
+
+    assert reader.rag_for(workspace_a.id) == RagSettings(0.75, 0.90, 9, False)
+    assert reader.rag_for(workspace_b.id) == DEFAULTS

@@ -127,3 +127,42 @@ def test_diagnosis_generation_forwards_more_than_five_supporting_fragments_by_de
     DiagnosisGenerationService(generator=generator, masker=masker).generate("error 809", evaluation)
 
     assert len(generator.prompts[0].fragments) == 8
+
+
+def test_strict_grounding_discards_uncited_draft_as_invalid_response():
+    evaluation = GroundingEvaluationDomainService().evaluate(
+        [fragment(0.95)],
+        GroundingThresholds(0.68, 0.80),
+        strict_grounding=True,
+    )
+    uncited_draft = DiagnosisDraft(
+        answerable=True,
+        summary="Abre los puertos UDP 500 y 4500.",
+        steps=("Revisa las reglas del router.",),
+        cited_fragments=(),
+    )
+    outcome = DiagnosisGenerationService(generator=FakeGenerator(uncited_draft), masker=masker).generate(
+        "error 809", evaluation
+    )
+    assert outcome.status is DiagnosisStatus.INVALID_RESPONSE
+    assert outcome.diagnosis is None
+
+    diagnosis = TriageDiagnosis.from_analysis(
+        workspace_id=WORKSPACE,
+        ticket_id=TICKET,
+        evaluation=evaluation,
+        outcome=outcome,
+        ocr=None,
+    )
+    assert diagnosis.outcome is DiagnosisStatus.INVALID_RESPONSE
+    assert diagnosis.review_status is ReviewStatus.NOT_APPLICABLE
+    assert diagnosis.route is TicketRoute.PENDING_ASSIGNMENT
+    assert diagnosis.sources == ()
+
+
+def test_build_evidence_retrieval_service_wires_iam_rag_parameters():
+    from app.smart_triage.infrastructure.iam.iam_rag_parameters import IamRagParametersProvider
+    from app.smart_triage.interfaces.rest.dependencies import build_evidence_retrieval_service
+
+    service = build_evidence_retrieval_service(session=None, events=InMemoryEventBus())  # type: ignore[arg-type]
+    assert isinstance(service._parameters, IamRagParametersProvider)
