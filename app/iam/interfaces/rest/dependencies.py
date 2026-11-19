@@ -5,9 +5,11 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.iam.application.authentication_service import AuthenticationService
+from app.iam.application.user_admin_service import UserAdministrationService
 from app.iam.infrastructure.persistence.user_repository import SqlAlchemyUserRepository
 from app.iam.infrastructure.security.bcrypt_password_hasher import BcryptPasswordHasher
 from app.iam.infrastructure.security.jwt_token_provider import JwtTokenProvider
+from app.iam.infrastructure.security.temporary_password_generator import SecretsTemporaryPasswordGenerator
 from app.shared.infrastructure.event_bus import InMemoryEventBus, get_event_bus
 
 
@@ -37,3 +39,16 @@ def get_authentication_service(
 
 def get_user_repository(db: Session = Depends(get_db)) -> SqlAlchemyUserRepository:
     return SqlAlchemyUserRepository(db)
+
+
+def get_user_administration_service(
+    db: Session = Depends(get_db),
+    bus: InMemoryEventBus = Depends(get_event_bus),
+) -> UserAdministrationService:
+    return UserAdministrationService(
+        session=db,
+        users=SqlAlchemyUserRepository(db),
+        hasher=BcryptPasswordHasher(),
+        password_generator=SecretsTemporaryPasswordGenerator(),
+        events=bus,
+    )

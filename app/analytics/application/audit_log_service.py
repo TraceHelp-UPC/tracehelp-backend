@@ -114,10 +114,32 @@ class AuditEventHandler:
         detail: dict[str, Any] = {}
 
         if event_type == "UserRegistered":
-            actor_id = getattr(event, "user_id", None)
+            registered_by = getattr(event, "registered_by", None)
             entity_type = "user"
-            entity_id = actor_id
-            detail = {"role": str(getattr(event, "role", ""))}
+            entity_id = getattr(event, "user_id", None)
+            actor_id = registered_by or entity_id
+            detail = {
+                "role": str(getattr(event, "role", "")),
+                "specialist_group": getattr(event, "specialist_group", None),
+                "source": "admin" if registered_by else "self",
+            }
+        elif event_type == "UserRoleChanged":
+            actor_id = getattr(event, "changed_by", None)
+            entity_type = "user"
+            entity_id = getattr(event, "user_id", None)
+            detail = {
+                "previous_role": str(getattr(event, "previous_role", "")),
+                "new_role": str(getattr(event, "new_role", "")),
+            }
+        elif event_type == "UserProfileUpdated":
+            actor_id = getattr(event, "changed_by", None)
+            entity_type = "user"
+            entity_id = getattr(event, "user_id", None)
+            detail = {"changes": getattr(event, "changes", {})}
+        elif event_type in {"UserDeactivated", "UserReactivated"}:
+            actor_id = getattr(event, "changed_by", None)
+            entity_type = "user"
+            entity_id = getattr(event, "user_id", None)
         elif event_type == "UserAuthenticated":
             actor_id = getattr(event, "user_id", None)
             entity_type = "user"

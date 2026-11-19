@@ -8,7 +8,7 @@ Aquí solo se agregan las excepciones que necesitan otro código. Cada contexto 
 from fastapi import FastAPI
 
 from app.helpdesk.domain.exceptions import TicketAccessDeniedError, TicketStatusChangeForbiddenError
-from app.iam.domain.exceptions import InactiveUserError, InvalidCredentialsError, InvalidTokenError
+from app.iam.domain.exceptions import EmailAlreadyRegisteredError, InactiveUserError, InvalidCredentialsError, InvalidTokenError
 from app.shared.interfaces.rest.problem_details import register_problem_handlers
 from app.smart_triage.application.diagnosis_query_service import DiagnosisAccessDeniedError
 from app.smart_triage.application.hitl_review_service import HitlPermissionError
@@ -19,6 +19,7 @@ STATUS_BY_EXCEPTION: dict[type[Exception], int] = {
     InvalidCredentialsError: 401,
     InvalidTokenError: 401,
     InactiveUserError: 403,
+    EmailAlreadyRegisteredError: 409,
     # Helpdesk
     TicketStatusChangeForbiddenError: 403,
     TicketAccessDeniedError: 403,
