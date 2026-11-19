@@ -1,4 +1,4 @@
-"""Servicio de aplicación y manejador de eventos para la bitácora de auditoría (US15, T36)."""
+"""Servicio de aplicación y manejador de eventos para la bitácora de auditoría (US15, T36; US21, T96)."""
 import uuid
 from collections.abc import Callable
 from contextlib import AbstractContextManager
@@ -8,7 +8,15 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.analytics.domain.audit_entry import AuditEntry
+from app.analytics.application.ports import (
+    DiagnosisTraceSummary,
+    ITicketTraceReader,
+    TicketTraceSummary,
+    TraceSourceItem,
+    UserIdentity,
+)
+from app.analytics.domain.audit_entry import AuditEntry, AuditIntegrityReport
+from app.analytics.domain.exceptions import AuditEntryNotFoundError, TicketNotFoundError
 from app.analytics.domain.repositories import AuditLogFilter, IAuditLogRepository
 from app.analytics.infrastructure.persistence.audit_log_repository import SqlAlchemyAuditLogRepository
 from app.core.database import SessionLocal
@@ -19,6 +27,14 @@ from app.shared.infrastructure.pii_masker import get_pii_masker
 
 # Campos de texto libre que se enmascaran con RegexSpacyPiiMasker antes de guardarse en detail
 _TEXT_FIELDS = {"reason", "note"}
+
+_APPROVING_DECISIONS = frozenset({"APPROVE", "EDIT_AND_APPROVE", "MANUAL_RESPONSE"})
+_REVIEW_STATUS_TO_DECISION = {
+    "APPROVED": "APPROVE",
+    "EDITED_AND_APPROVED": "EDIT_AND_APPROVE",
+    "REJECTED": "REJECT",
+    "MANUAL_RESPONSE": "MANUAL_RESPONSE",
+}
 
 
 @dataclass(frozen=True)
@@ -34,41 +50,152 @@ class AuditLogItemView:
     detail: dict[str, Any]
     integrity_hash: str
     occurred_at: datetime
+    seq: int | None = None
+    previous_hash: str | None = None
+
+
+@dataclass(frozen=True)
+class AuthorizingAnalystView:
+    id: uuid.UUID
+    name: str
+    role: str
+    decision: str
+    reviewed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class TicketAuditTraceView:
+    ticket: TicketTraceSummary
+    diagnosis: DiagnosisTraceSummary | None
+    sources: list[TraceSourceItem]
+    authorizing_analyst: AuthorizingAnalystView | None
+    events: list[AuditLogItemView]
+    total_events: int
+    all_hashes_valid: bool
 
 
 class AuditLogService:
-    """Servicio de consulta paginada y registro de la bitácora de auditoría."""
+    """Servicio de consulta paginada, verificación de integridad y trazabilidad de la bitácora."""
 
     def __init__(
         self,
         repository: IAuditLogRepository,
         user_names: Callable[[set[uuid.UUID]], dict[uuid.UUID, str]] | None = None,
+        trace_reader: ITicketTraceReader | None = None,
     ) -> None:
         self._repository = repository
         self._user_names = user_names or (lambda _: {})
+        self._trace_reader = trace_reader
 
     def query(self, criteria: AuditLogFilter, page: PageRequest) -> Page[AuditLogItemView]:
         entries, total = self._repository.query(criteria, offset=page.offset, limit=page.size)
         page.ensure_in_range(total)
         actor_ids = {entry.actor_id for entry in entries if entry.actor_id is not None}
         names = self._user_names(actor_ids) if actor_ids else {}
-        items = [
-            AuditLogItemView(
-                id=entry.id,
-                workspace_id=entry.workspace_id,
-                event_type=entry.event_type,
-                actor_id=entry.actor_id,
-                actor_name=names.get(entry.actor_id, "Usuario") if entry.actor_id else "Sistema",
-                entity_type=entry.entity_type,
-                entity_id=entry.entity_id,
-                ticket_id=entry.ticket_id,
-                detail=entry.detail,
-                integrity_hash=entry.integrity_hash,
-                occurred_at=entry.occurred_at,
-            )
-            for entry in entries
-        ]
+        items = [self._to_item_view(entry, names) for entry in entries]
         return Page(items=items, page=page.page, size=page.size, total=total)
+
+    def verify_entry(self, workspace_id: uuid.UUID, entry_id: uuid.UUID) -> AuditIntegrityReport:
+        """Comprueba el hash SHA-256 propio y el encadenamiento con el registro predecesor en O(1)."""
+        entry = self._repository.find_by_id(workspace_id, entry_id)
+        if entry is None:
+            raise AuditEntryNotFoundError("La entrada de auditoría solicitada no existe.")
+        previous = (
+            self._repository.find_previous(workspace_id, entry.seq) if entry.seq is not None else None
+        )
+        return AuditIntegrityReport.evaluate(entry, previous)
+
+    def ticket_trace(self, workspace_id: uuid.UUID, ticket_id: uuid.UUID) -> TicketAuditTraceView:
+        """Reconstruye la trazabilidad completa de un ticket (fuentes, analista autorizador y eventos)."""
+        if self._trace_reader is None:
+            raise RuntimeError("ITicketTraceReader no está configurado en AuditLogService.")
+
+        snapshot = self._trace_reader.get_ticket_trace_snapshot(workspace_id, ticket_id)
+        if snapshot is None:
+            raise TicketNotFoundError("El ticket solicitado no existe.")
+
+        entries = self._repository.list_for_ticket(workspace_id, ticket_id)
+
+        user_ids: set[uuid.UUID] = {entry.actor_id for entry in entries if entry.actor_id is not None}
+        if snapshot.diagnosis and snapshot.diagnosis.reviewed_by is not None:
+            user_ids.add(snapshot.diagnosis.reviewed_by)
+
+        identities = self._trace_reader.get_users_by_ids(user_ids) if user_ids else {}
+        names = {uid: identity.full_name for uid, identity in identities.items()}
+        missing = user_ids - set(names)
+        if missing:
+            names.update(self._user_names(missing))
+
+        event_views = [self._to_item_view(entry, names) for entry in entries]
+        authorizing_analyst = self._resolve_authorizing_analyst(entries, snapshot.diagnosis, identities, names)
+        all_hashes_valid = all(entry.verify_integrity() for entry in entries)
+
+        return TicketAuditTraceView(
+            ticket=snapshot.ticket,
+            diagnosis=snapshot.diagnosis,
+            sources=list(snapshot.sources),
+            authorizing_analyst=authorizing_analyst,
+            events=event_views,
+            total_events=len(event_views),
+            all_hashes_valid=all_hashes_valid,
+        )
+
+    @staticmethod
+    def _to_item_view(entry: AuditEntry, names: dict[uuid.UUID, str]) -> AuditLogItemView:
+        return AuditLogItemView(
+            id=entry.id,
+            workspace_id=entry.workspace_id,
+            event_type=entry.event_type,
+            actor_id=entry.actor_id,
+            actor_name=names.get(entry.actor_id, "Usuario") if entry.actor_id else "Sistema",
+            entity_type=entry.entity_type,
+            entity_id=entry.entity_id,
+            ticket_id=entry.ticket_id,
+            detail=entry.detail,
+            integrity_hash=entry.integrity_hash,
+            occurred_at=entry.occurred_at,
+            seq=entry.seq,
+            previous_hash=entry.previous_hash,
+        )
+
+    @staticmethod
+    def _resolve_authorizing_analyst(
+        entries: list[AuditEntry],
+        diagnosis: DiagnosisTraceSummary | None,
+        identities: dict[uuid.UUID, UserIdentity],
+        names: dict[uuid.UUID, str],
+    ) -> AuthorizingAnalystView | None:
+        review_entries = [e for e in entries if e.event_type == "AiResolutionReviewed" and e.actor_id is not None]
+        chosen: AuditEntry | None = None
+        for entry in reversed(review_entries):
+            if str(entry.detail.get("decision") or "") in _APPROVING_DECISIONS:
+                chosen = entry
+                break
+        if chosen is None and review_entries:
+            chosen = review_entries[-1]
+
+        if chosen is not None and chosen.actor_id is not None:
+            identity = identities.get(chosen.actor_id)
+            return AuthorizingAnalystView(
+                id=chosen.actor_id,
+                name=identity.full_name if identity else names.get(chosen.actor_id, "Usuario"),
+                role=identity.role if identity else "UNKNOWN",
+                decision=str(chosen.detail.get("decision") or ""),
+                reviewed_at=chosen.occurred_at,
+            )
+
+        if diagnosis is not None and diagnosis.reviewed_by is not None:
+            identity = identities.get(diagnosis.reviewed_by)
+            decision = _REVIEW_STATUS_TO_DECISION.get(diagnosis.review_status, diagnosis.review_status)
+            return AuthorizingAnalystView(
+                id=diagnosis.reviewed_by,
+                name=identity.full_name if identity else names.get(diagnosis.reviewed_by, "Usuario"),
+                role=identity.role if identity else "UNKNOWN",
+                decision=decision,
+                reviewed_at=diagnosis.reviewed_at,
+            )
+
+        return None
 
 
 class AuditEventHandler:
@@ -97,9 +224,9 @@ class AuditEventHandler:
         if entry is None:
             return None
         with self._session_factory() as session:
-            SqlAlchemyAuditLogRepository(session).append(entry)
+            persisted = SqlAlchemyAuditLogRepository(session).append(entry)
             session.commit()
-        return entry
+        return persisted
 
     def to_audit_entry(self, event: DomainEvent) -> AuditEntry | None:
         event_type = type(event).__name__

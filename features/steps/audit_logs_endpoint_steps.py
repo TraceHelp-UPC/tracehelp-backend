@@ -23,8 +23,8 @@ from app.iam.interfaces.rest.dependencies import get_token_provider
 CANONICAL = "/api/v1/audit/logs"
 LEGACY = "/api/v1/audit-log"
 ENTRY_FIELDS = {
-    "id", "workspace_id", "event_type", "actor_id", "actor_name", "entity_type", "entity_id",
-    "ticket_id", "detail", "integrity_hash", "occurred_at",
+    "id", "seq", "workspace_id", "event_type", "actor_id", "actor_name", "entity_type", "entity_id",
+    "ticket_id", "detail", "integrity_hash", "previous_hash", "occurred_at",
 }
 PAGE_FIELDS = {"items", "page", "size", "total", "total_pages"}
 

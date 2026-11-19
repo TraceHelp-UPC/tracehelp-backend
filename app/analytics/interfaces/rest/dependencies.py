@@ -7,9 +7,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.analytics.application.audit_log_service import AuditLogService
+from app.analytics.application.ports import ITicketTraceReader
 from app.analytics.domain.exceptions import InvalidDateRangeError
 from app.analytics.domain.repositories import AuditLogFilter
 from app.analytics.infrastructure.persistence.audit_log_repository import SqlAlchemyAuditLogRepository
+from app.analytics.infrastructure.persistence.ticket_trace_reader import SqlAlchemyTicketTraceReader
 from app.core.database import get_db
 from app.iam.domain.permissions import Permission
 from app.iam.infrastructure.persistence.models import UserModel
@@ -26,10 +28,18 @@ def _resolve_user_names(session: Session):
     return _lookup
 
 
-def get_audit_log_service(db: Session = Depends(get_db)) -> AuditLogService:
+def get_ticket_trace_reader(db: Session = Depends(get_db)) -> ITicketTraceReader:
+    return SqlAlchemyTicketTraceReader(db)
+
+
+def get_audit_log_service(
+    db: Session = Depends(get_db),
+    trace_reader: ITicketTraceReader = Depends(get_ticket_trace_reader),
+) -> AuditLogService:
     return AuditLogService(
         repository=SqlAlchemyAuditLogRepository(db),
         user_names=_resolve_user_names(db),
+        trace_reader=trace_reader,
     )
 
 
