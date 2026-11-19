@@ -189,6 +189,27 @@ class AuditEventHandler:
                 "previous_status": str(getattr(event, "previous_status", "")),
                 "new_status": str(getattr(event, "new_status", "")),
             }
+        elif event_type == "TicketEscalated":
+            actor_id = getattr(event, "escalated_by", None)
+            entity_type = "ticket"
+            entity_id = ticket_id
+            assigned_analyst = getattr(event, "assigned_analyst_id", None)
+            detail = {
+                "specialist_group": str(getattr(event, "specialist_group", "")),
+                "assigned_analyst_id": str(assigned_analyst) if assigned_analyst is not None else None,
+                "has_triage_snapshot": bool(getattr(event, "has_triage_snapshot", False)),
+                "reason": self._mask_text(getattr(event, "reason", None)),
+            }
+        elif event_type == "TicketReturnedToL1":
+            actor_id = getattr(event, "returned_by", None)
+            entity_type = "ticket"
+            entity_id = ticket_id
+            assigned_analyst = getattr(event, "assigned_analyst_id", None)
+            detail = {
+                "assigned_analyst_id": str(assigned_analyst) if assigned_analyst is not None else None,
+                "escalated_group": getattr(event, "escalated_group", None),
+                "reason": self._mask_text(getattr(event, "reason", None)),
+            }
         elif event_type in {"TechnicalDocumentUploaded", "TechnicalDocumentVectorized", "TechnicalDocumentIngestionFailed"}:
             actor_id = getattr(event, "uploaded_by", None)
             entity_type = "technical_document"

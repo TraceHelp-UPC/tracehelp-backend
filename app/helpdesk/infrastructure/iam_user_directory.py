@@ -13,6 +13,7 @@ from app.helpdesk.application.ticket_queries import IUserDirectory
 from app.iam.domain.enums import AvailabilityStatus, UserStatus
 from app.iam.domain.user import SUPPORT_ROLES
 from app.iam.infrastructure.persistence.models import UserModel
+from app.shared.domain.specialist_group import SpecialistGroup
 
 
 class IamUserDirectory(IUserDirectory, IAnalystAvailabilityReader):
@@ -25,6 +26,9 @@ class IamUserDirectory(IUserDirectory, IAnalystAvailabilityReader):
             return {}
         rows = self._session.execute(select(UserModel.id, UserModel.full_name).where(UserModel.id.in_(ids)))
         return {row.id: row.full_name for row in rows}
+
+    def specialist_group(self, user_id: uuid.UUID) -> SpecialistGroup | None:
+        return self._session.scalar(select(UserModel.specialist_group).where(UserModel.id == user_id))
 
     def get_candidate(self, analyst_id: uuid.UUID) -> AnalystAssignmentCandidate | None:
         model = self._session.get(UserModel, analyst_id)

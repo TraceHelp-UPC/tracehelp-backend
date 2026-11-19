@@ -16,6 +16,7 @@ from app.helpdesk.application.ticket_query_service import (
 )
 from app.helpdesk.domain.enums import TicketCategory, TicketPriority, TicketStatus
 from app.helpdesk.domain.ticket import MAX_MESSAGE_LENGTH, MAX_REASON_LENGTH, Ticket
+from app.shared.domain.specialist_group import SpecialistGroup
 
 
 class EvidenceResponse(BaseModel):
@@ -38,6 +39,10 @@ class TicketResponse(BaseModel):
     current_tier: str
     reporter_id: uuid.UUID
     assigned_analyst_id: uuid.UUID | None
+    escalated_group: str | None = None
+    escalated_at: datetime | None = None
+    assigned_specialist_id: uuid.UUID | None = None
+    specialist_claimed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     resolved_at: datetime | None
@@ -59,6 +64,10 @@ class TicketResponse(BaseModel):
             current_tier=ticket.current_tier.value,
             reporter_id=ticket.reporter_id,
             assigned_analyst_id=ticket.assigned_analyst_id,
+            escalated_group=ticket.escalated_group.value if ticket.escalated_group else None,
+            escalated_at=ticket.escalated_at,
+            assigned_specialist_id=ticket.assigned_specialist_id,
+            specialist_claimed_at=ticket.specialist_claimed_at,
             created_at=ticket.created_at,
             updated_at=ticket.updated_at,
             resolved_at=ticket.resolved_at,
@@ -101,6 +110,62 @@ class AssignTicketRequest(BaseModel):
         max_length=MAX_REASON_LENGTH,
         description="Motivo de la asignación",
         examples=["Asignado a analista disponible"],
+    )
+
+
+class EscalateTicketRequest(BaseModel):
+    """Solicitud para escalar un ticket ASSIGNED_L1 a un grupo especialista L2 (US17)."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "specialist_group": "REDES",
+                    "reason": "El error 809 persiste tras reiniciar el perfil VPN; requiere revisión de firewall corporativo.",
+                }
+            ]
+        },
+    )
+
+    specialist_group: SpecialistGroup = Field(
+        ...,
+        description="Grupo especialista L2 destino: REDES, APLICACIONES, INFRAESTRUCTURA o SEGURIDAD",
+        examples=["REDES"],
+    )
+    reason: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=5, max_length=MAX_REASON_LENGTH),
+    ] = Field(
+        ...,
+        description=f"Motivo del escalamiento (5 a {MAX_REASON_LENGTH} caracteres, sin contar espacios extremos)",
+        examples=["El error 809 persiste tras reiniciar el perfil VPN; requiere revisión de firewall corporativo."],
+    )
+
+
+class ReturnToL1Request(BaseModel):
+    """Solicitud para devolver un ticket ESCALATED_L2 al analista L1 original (US17)."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "requested_info": "Solicitar al colaborador la captura del comando ipconfig /all y confirmar si usa red doméstica o móvil.",
+                }
+            ]
+        },
+    )
+
+    requested_info: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=5, max_length=MAX_MESSAGE_LENGTH),
+    ] = Field(
+        ...,
+        description=f"Información adicional requerida al analista L1 (5 a {MAX_MESSAGE_LENGTH} caracteres)",
+        examples=[
+            "Solicitar al colaborador la captura del comando ipconfig /all y confirmar si usa red doméstica o móvil."
+        ],
     )
 
 
