@@ -144,6 +144,15 @@ class AuditEventHandler:
             actor_id = getattr(event, "user_id", None)
             entity_type = "user"
             entity_id = actor_id
+        elif event_type == "ConfigurationChanged":
+            actor_id = getattr(event, "changed_by", None)
+            entity_type = "workspace_settings"
+            entity_id = workspace_id
+            ticket_id = None
+            detail = {
+                "section": str(getattr(event, "section", "")),
+                "changes": getattr(event, "changes", {}),
+            }
         elif event_type == "TicketRegistered":
             actor_id = getattr(event, "reporter_id", None)
             entity_type = "ticket"
@@ -179,6 +188,19 @@ class AuditEventHandler:
                 "author_is_reporter": bool(getattr(event, "author_is_reporter", False)),
                 "ticket_status": str(getattr(event, "ticket_status", "")),
                 "content_length": getattr(event, "content_length", None),
+            }
+        elif event_type == "SelfServiceAccepted":
+            actor_id = getattr(event, "reporter_id", None)
+            entity_type = "ticket"
+            entity_id = ticket_id
+            detail = {"outcome": "RESOLVED_BY_SELF_SERVICE"}
+        elif event_type == "SelfServiceRejected":
+            actor_id = getattr(event, "reporter_id", None)
+            entity_type = "ticket"
+            entity_id = ticket_id
+            detail = {
+                "outcome": "DERIVED_TO_ANALYST",
+                "reason": self._mask_text(getattr(event, "reason", None)),
             }
         elif event_type == "TicketAssigned":
             actor_id = getattr(event, "assigned_by", None)

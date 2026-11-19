@@ -2,6 +2,7 @@
 import uuid
 from dataclasses import dataclass
 
+from app.helpdesk.application.ports import ISelfServiceRecommendationReader, SelfServiceRecommendation
 from app.helpdesk.application.status_change_policy import Actor
 from app.helpdesk.application.ticket_queries import (
     SCOPE_STATUSES,
@@ -36,6 +37,7 @@ class TicketDetail:
     ticket: Ticket
     names: dict[uuid.UUID, str]
     include_internal_notes: bool
+    self_service_recommendation: SelfServiceRecommendation | None = None
 
 
 @dataclass(frozen=True)
@@ -72,10 +74,17 @@ def _clean_search(search: str | None) -> str | None:
 
 
 class TicketQueryService:
-    def __init__(self, read_model: ITicketReadModel, tickets: ITicketRepository, users: IUserDirectory) -> None:
+    def __init__(
+        self,
+        read_model: ITicketReadModel,
+        tickets: ITicketRepository,
+        users: IUserDirectory,
+        self_service_reader: ISelfServiceRecommendationReader | None = None,
+    ) -> None:
         self._read_model = read_model
         self._tickets = tickets
         self._users = users
+        self._self_service_reader = self_service_reader
 
     def queue(
         self,
@@ -125,10 +134,16 @@ class TicketQueryService:
         ids = {ticket.reporter_id, *(c.author_id for c in ticket.comments)}
         if ticket.assigned_analyst_id:
             ids.add(ticket.assigned_analyst_id)
+        recommendation = (
+            self._self_service_reader.for_ticket(ticket.id)
+            if ticket.status is TicketStatus.SELF_SERVICE_PROPOSED and self._self_service_reader is not None
+            else None
+        )
         return TicketDetail(
             ticket=ticket,
             names=self._users.display_names(ids),
             include_internal_notes=actor.is_support_staff,
+            self_service_recommendation=recommendation,
         )
 
     def evidence(self, actor: Actor, ticket_id: uuid.UUID, evidence_id: uuid.UUID) -> EvidenceFile:

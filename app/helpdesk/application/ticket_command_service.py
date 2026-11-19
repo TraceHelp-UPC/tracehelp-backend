@@ -89,6 +89,19 @@ class PostMessageCommand:
 
 
 @dataclass(frozen=True)
+class AcceptSelfServiceCommand:
+    ticket_id: uuid.UUID
+    actor: Actor
+
+
+@dataclass(frozen=True)
+class RejectSelfServiceCommand:
+    ticket_id: uuid.UUID
+    actor: Actor
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
 class PostedMessage:
     """Resultado de publicar un mensaje: el comentario creado y lo que la API necesita para responder."""
 
@@ -369,6 +382,42 @@ class TicketCommandService:
         self._tickets.save(ticket)
         self._session.commit()
         self._events.publish_all(ticket.pull_events())
+        return ticket
+
+    def accept_self_service(self, command: AcceptSelfServiceCommand) -> Ticket:
+        """El colaborador confirma la solución de autoservicio propuesta (US12, T76).
+
+        Orden de validación: ticket existente en el workspace (404), actor es el reportante (403)
+        y estado SELF_SERVICE_PROPOSED (422). Publica TicketStatusChanged y SelfServiceAccepted.
+        """
+        ticket = self._load_for_self_service_response(command.ticket_id, command.actor)
+        ticket.accept_self_service(reporter_id=command.actor.id)
+        self._tickets.save(ticket)
+        self._session.commit()
+        self._events.publish_all(ticket.pull_events())
+        return ticket
+
+    def reject_self_service(self, command: RejectSelfServiceCommand) -> Ticket:
+        """El colaborador rechaza la recomendación de autoservicio y deriva el caso a soporte L1 (US12, T76).
+
+        Orden de validación: ticket existente en el workspace (404), actor es el reportante (403)
+        y estado SELF_SERVICE_PROPOSED (422). Publica TicketStatusChanged y SelfServiceRejected.
+        """
+        ticket = self._load_for_self_service_response(command.ticket_id, command.actor)
+        ticket.reject_self_service(reporter_id=command.actor.id, reason=command.reason)
+        self._tickets.save(ticket)
+        self._session.commit()
+        self._events.publish_all(ticket.pull_events())
+        return ticket
+
+    def _load_for_self_service_response(self, ticket_id: uuid.UUID, actor: Actor) -> Ticket:
+        ticket = self._tickets.find_by_id(ticket_id)
+        if ticket is None or ticket.workspace_id != actor.workspace_id:
+            raise TicketNotFoundError("El ticket no existe.")
+        if actor.id != ticket.reporter_id:
+            raise TicketStatusChangeForbiddenError(
+                "Solo el colaborador que reportó el incidente puede responder a la recomendación de autoservicio."
+            )
         return ticket
 
     def stage_resolution(

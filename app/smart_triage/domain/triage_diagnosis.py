@@ -144,6 +144,14 @@ class TriageDiagnosis(AggregateRoot):
     def can_review(self, decision: ReviewDecision) -> bool:
         return self.review_status in _ALLOWED[decision]
 
+    def reopen_for_analyst_review(self) -> bool:
+        """Cuando el colaborador rechaza el autoservicio, habilita la validación HITL del analista (US12, D10)."""
+        if self.review_status is not ReviewStatus.SELF_SERVICE_PROPOSED:
+            return False
+        self.review_status = ReviewStatus.PENDING_REVIEW
+        self.updated_at = _now()
+        return True
+
     def ensure_can_review(self, decision: ReviewDecision) -> None:
         if self.can_review(decision):
             return

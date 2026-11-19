@@ -118,10 +118,15 @@ _MESSAGES = {
     "uuid_parsing": "no es un identificador válido",
     "uuid_type": "no es un identificador válido",
     "int_parsing": "debe ser un número entero",
+    "int_from_float": "debe ser un número entero",
     "float_parsing": "debe ser un número",
+    "decimal_parsing": "debe ser un número",
+    "decimal_type": "debe ser un número",
+    "decimal_max_places": "admite como máximo 2 decimales",
     "bool_parsing": "debe ser verdadero o falso",
     "json_invalid": "el JSON está mal formado",
     "model_attributes_type": "el cuerpo de la solicitud no tiene el formato esperado",
+    "extra_forbidden": "campo no permitido",
     "greater_than": "es menor al mínimo permitido",
     "greater_than_equal": "es menor al mínimo permitido",
     "less_than": "supera el máximo permitido",
@@ -143,6 +148,16 @@ def _message(error: Mapping[str, Any]) -> str:
         return f"valor no permitido; usa {ctx['expected']}"
     if kind == "string_too_long" and ctx.get("max_length"):
         return f"no puede superar los {ctx['max_length']} caracteres"
+    if kind == "greater_than_equal" and "ge" in ctx:
+        return f"debe ser mayor o igual que {ctx['ge']}"
+    if kind == "less_than_equal" and "le" in ctx:
+        return f"debe ser menor o igual que {ctx['le']}"
+    if kind == "greater_than" and "gt" in ctx:
+        return f"debe ser mayor que {ctx['gt']}"
+    if kind == "less_than" and "lt" in ctx:
+        return f"debe ser menor que {ctx['lt']}"
+    if kind == "decimal_max_places" and "decimal_places" in ctx:
+        return f"admite como máximo {ctx['decimal_places']} decimales"
     return _MESSAGES.get(kind, str(error.get("msg", "valor no válido")))
 
 

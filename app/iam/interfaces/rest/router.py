@@ -18,6 +18,7 @@ from app.iam.domain.permissions import Permission
 from app.iam.interfaces.rest.auth_dependencies import CurrentUser, get_current_user
 from app.iam.interfaces.rest.dependencies import get_authentication_service, get_user_repository
 from app.iam.infrastructure.persistence.user_repository import SqlAlchemyUserRepository
+from app.iam.interfaces.rest.config_router import router as config_router
 from app.iam.interfaces.rest.users_router import router as users_router
 from app.iam.interfaces.rest.schemas import (
     AccessTokenResponse,
@@ -31,6 +32,7 @@ from app.iam.interfaces.rest.schemas import (
 
 router = APIRouter(tags=["IAM"])
 router.include_router(users_router)
+router.include_router(config_router)
 
 _UNAUTHORIZED = {"WWW-Authenticate": "Bearer"}
 
