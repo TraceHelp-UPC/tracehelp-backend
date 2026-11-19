@@ -57,3 +57,28 @@ class MessagePosted(DomainEvent):
     is_internal_note: bool
     ticket_status: str
     content_length: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class TicketEscalated(DomainEvent):
+    """Se emite cuando un analista L1 escala un ticket a un grupo especialista L2 (US17, T79)."""
+
+    ticket_id: uuid.UUID
+    workspace_id: uuid.UUID
+    escalated_by: uuid.UUID
+    specialist_group: str
+    assigned_analyst_id: uuid.UUID | None
+    has_triage_snapshot: bool
+    reason: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class TicketReturnedToL1(DomainEvent):
+    """Se emite cuando un especialista L2 devuelve un ticket escalado al analista L1 original (US17, T79)."""
+
+    ticket_id: uuid.UUID
+    workspace_id: uuid.UUID
+    returned_by: uuid.UUID
+    assigned_analyst_id: uuid.UUID | None
+    escalated_group: str | None
+    reason: str

@@ -5,10 +5,22 @@ from datetime import UTC, datetime
 
 from app.helpdesk.domain.enums import ImpactLevel, SupportTier, TicketCategory, TicketPriority, TicketStatus
 from app.helpdesk.domain import state_machine
-from app.helpdesk.domain.events import MessagePosted, TicketClassificationCorrected, TicketRegistered, TicketStatusChanged
-from app.helpdesk.domain.exceptions import InvalidTicketDataError, TicketClosedError
+from app.helpdesk.domain.events import (
+    MessagePosted,
+    TicketClassificationCorrected,
+    TicketEscalated,
+    TicketRegistered,
+    TicketReturnedToL1,
+    TicketStatusChanged,
+)
+from app.helpdesk.domain.exceptions import (
+    InvalidTicketDataError,
+    InvalidTicketStateTransitionError,
+    TicketClosedError,
+)
 from app.helpdesk.domain.value_objects import VisualEvidence
 from app.shared.domain.aggregate_root import AggregateRoot
+from app.shared.domain.specialist_group import SpecialistGroup
 
 MAX_TITLE_LENGTH = 200
 MAX_EVIDENCES = 5
@@ -74,6 +86,10 @@ class Ticket(AggregateRoot):
         category: TicketCategory | None = None,
         number: int | None = None,
         assigned_analyst_id: uuid.UUID | None = None,
+        escalated_group: SpecialistGroup | None = None,
+        escalated_at: datetime | None = None,
+        assigned_specialist_id: uuid.UUID | None = None,
+        specialist_claimed_at: datetime | None = None,
         evidences: list[VisualEvidence] | None = None,
         comments: list[TicketComment] | None = None,
         status_history: list[TicketStatusChange] | None = None,
@@ -96,6 +112,10 @@ class Ticket(AggregateRoot):
         self.category = category
         self.number = number
         self.assigned_analyst_id = assigned_analyst_id
+        self.escalated_group = escalated_group
+        self.escalated_at = escalated_at
+        self.assigned_specialist_id = assigned_specialist_id
+        self.specialist_claimed_at = specialist_claimed_at
         self.evidences = list(evidences or [])
         self.comments = list(comments or [])
         self.status_history = list(status_history or [])
@@ -339,3 +359,109 @@ class Ticket(AggregateRoot):
                 reason=clean_reason,
             )
         )
+
+    def escalate(
+        self,
+        *,
+        escalated_by: uuid.UUID,
+        specialist_group: SpecialistGroup,
+        reason: str,
+        context_snapshot: str,
+        has_triage_snapshot: bool,
+    ) -> TicketComment:
+        """Escala el ticket de ASSIGNED_L1 a ESCALATED_L2 con snapshot de contexto como nota interna (US17, D09/D20/D30).
+
+        Conserva assigned_analyst_id (L1 de origen), limpia cualquier reclamo L2 previo y registra
+        TicketStatusChanged + TicketEscalated. Usa add_comment (no post_message) para evitar el tope de
+        2 000 caracteres y no emitir MessagePosted.
+        """
+        state_machine.ensure_transition(self.status, TicketStatus.ESCALATED_L2)
+        clean_reason = (reason or "").strip()
+        if not clean_reason:
+            raise InvalidTicketDataError("El motivo del escalamiento es obligatorio.")
+        if len(clean_reason) > MAX_REASON_LENGTH:
+            raise InvalidTicketDataError(f"El motivo no puede superar los {MAX_REASON_LENGTH} caracteres.")
+        clean_snapshot = (context_snapshot or "").strip()
+        if not clean_snapshot:
+            raise InvalidTicketDataError("El snapshot de contexto no puede estar vacío.")
+
+        self.change_status(TicketStatus.ESCALATED_L2, changed_by=escalated_by, reason=clean_reason)
+        self.escalated_group = specialist_group
+        self.escalated_at = self.updated_at
+        self.assigned_specialist_id = None
+        self.specialist_claimed_at = None
+
+        comment = self.add_comment(
+            author_id=escalated_by,
+            content=clean_snapshot,
+            is_internal_note=True,
+            is_ai_generated=False,
+        )
+        self.record_event(
+            TicketEscalated(
+                ticket_id=self.id,
+                workspace_id=self.workspace_id,
+                escalated_by=escalated_by,
+                specialist_group=specialist_group.value,
+                assigned_analyst_id=self.assigned_analyst_id,
+                has_triage_snapshot=has_triage_snapshot,
+                reason=clean_reason,
+            )
+        )
+        return comment
+
+    def return_to_l1(
+        self,
+        *,
+        returned_by: uuid.UUID,
+        requested_info: str,
+        internal_note: str,
+    ) -> TicketComment:
+        """Devuelve un ticket ESCALATED_L2 al analista L1 original solicitando información adicional (US17, D09/D20/D30).
+
+        Limpia el reclamo L2, conserva escalated_group y escalated_at (para historial y FCR en T103),
+        conserva assigned_analyst_id y guarda la solicitud como nota interna vía add_comment.
+        """
+        state_machine.ensure_transition(self.status, TicketStatus.ASSIGNED_L1)
+        if self.status is not TicketStatus.ESCALATED_L2:
+            raise InvalidTicketStateTransitionError(
+                f"Solo se pueden devolver a Nivel 1 los tickets en estado ESCALATED_L2 (estado actual: {self.status.value})."
+            )
+        if self.assigned_analyst_id is None:
+            raise InvalidTicketDataError("El ticket no tiene un analista L1 original asignado para devolverlo.")
+
+        clean_info = (requested_info or "").strip()
+        if not clean_info:
+            raise InvalidTicketDataError(
+                "Debes indicar la información adicional requerida para devolver el ticket a Nivel 1."
+            )
+        if len(clean_info) > MAX_MESSAGE_LENGTH:
+            raise InvalidTicketDataError(
+                f"La información solicitada no puede superar los {MAX_MESSAGE_LENGTH} caracteres."
+            )
+        clean_note = (internal_note or "").strip()
+        if not clean_note:
+            raise InvalidTicketDataError("La nota interna de devolución no puede estar vacía.")
+
+        history_reason = clean_info[:MAX_REASON_LENGTH]
+        self.change_status(TicketStatus.ASSIGNED_L1, changed_by=returned_by, reason=history_reason)
+        self.assigned_specialist_id = None
+        self.specialist_claimed_at = None
+
+        comment = self.add_comment(
+            author_id=returned_by,
+            content=clean_note,
+            is_internal_note=True,
+            is_ai_generated=False,
+        )
+        self.record_event(
+            TicketReturnedToL1(
+                ticket_id=self.id,
+                workspace_id=self.workspace_id,
+                returned_by=returned_by,
+                assigned_analyst_id=self.assigned_analyst_id,
+                escalated_group=self.escalated_group.value if self.escalated_group else None,
+                reason=clean_info,
+            )
+        )
+        return comment
