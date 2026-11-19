@@ -16,6 +16,7 @@ from app.helpdesk.interfaces.rest.router import router as helpdesk_router
 from app.iam.interfaces.rest.router import router as iam_router
 from app.knowledge.interfaces.rest.router import router as knowledge_router
 from app.shared.infrastructure.event_bus import event_bus
+from app.shared.infrastructure.scheduler import register_default_jobs, scheduler
 from app.shared.interfaces.rest.problem_details import ProblemDetail
 from app.smart_triage.interfaces.rest.router import router as smart_triage_router
 
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Al arrancar, reanuda las ingestas de manuales (T23) y el triaje de tickets (T28) que quedaron a medias."""
+    """Al arrancar, reanuda las ingestas (T23) y el triaje (T28) pendientes y levanta el scheduler (T60)."""
     worker = None
     if settings.ingestion_worker_enabled:
         from app.knowledge.infrastructure.ingestion_worker import ingestion_worker as worker
@@ -42,7 +43,11 @@ async def lifespan(_: FastAPI):
             triage.resume_pending()
         except Exception:  # noqa: BLE001 - si la base no responde, la API arranca igual
             logger.exception("No se pudo reanudar el triaje pendiente")
+    if settings.scheduler_enabled:
+        register_default_jobs(scheduler)
+        scheduler.start()
     yield
+    await scheduler.stop()
     if worker is not None:
         worker.shutdown()
     if triage is not None:
@@ -78,8 +83,10 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["Health"])
     def health() -> JSONResponse:
-        """Health check usado por Render. Responde 503 si la base de datos no está disponible."""
-        body = {
+        """Health check usado por Render. Responde 503 solo si la base de datos no está disponible.
+
+        Incluye el estado del scheduler (T60); su estado nunca altera el código HTTP."""
+        body: dict = {
             "status": "ok",
             "version": settings.app_version,
             "environment": settings.environment,
@@ -91,6 +98,7 @@ def create_app() -> FastAPI:
         except Exception:  # noqa: BLE001 - cualquier fallo de conexión se reporta como caída
             body.update({"status": "degraded", "database": "down", "pgvector": False})
             status_code = 503
+        body["scheduler"] = scheduler.snapshot()  # memoria de esta instancia; no cambia el código HTTP
         return JSONResponse(content=body, status_code=status_code)
 
     return app

@@ -33,6 +33,7 @@ def before_all(context):
     os.environ["DATABASE_URL"] = test_url
     os.environ["INGESTION_WORKER_ENABLED"] = "false"
     os.environ["TRIAGE_WORKER_ENABLED"] = "false"
+    os.environ["SCHEDULER_ENABLED"] = "false"
     from app.core.config import Settings, get_settings
 
     get_settings.cache_clear()

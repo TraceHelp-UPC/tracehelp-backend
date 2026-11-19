@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     # Aplicación
     app_name: str = "TraceHelp API"
     app_version: str = "1.0.0"
-    environment: str = "development" 
+    environment: str = "development"
     api_prefix: str = "/api/v1"
     cors_origins: list[str] = ["*"]
 
@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     self_service_threshold: float = 0.80  # mínimo para proponer autoservicio al colaborador
     retrieval_top_k: int = 5  # fragmentos que se recuperan por consulta
 
+    # Scheduler de tareas periódicas (T60). Las pruebas lo desactivan. Un intervalo <= 0 apaga el job.
+    scheduler_enabled: bool = True
+    scheduler_tick_seconds: int = 30
+    job_heartbeat_interval_seconds: int = 60
+    job_release_inactive_tickets_interval_seconds: int = 300  # T73
+    job_auto_close_resolved_tickets_interval_seconds: int = 3600  # T88
+    job_knowledge_gap_analysis_interval_seconds: int = 86400  # T100
+
     # Notificaciones
     resend_api_key: str = ""
 
@@ -64,6 +72,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-
- #
- # yes
