@@ -144,6 +144,15 @@ class AuditEventHandler:
             actor_id = getattr(event, "user_id", None)
             entity_type = "user"
             entity_id = actor_id
+        elif event_type == "ConfigurationChanged":
+            actor_id = getattr(event, "changed_by", None)
+            entity_type = "workspace_settings"
+            entity_id = workspace_id
+            ticket_id = None
+            detail = {
+                "section": str(getattr(event, "section", "")),
+                "changes": getattr(event, "changes", {}),
+            }
         elif event_type == "TicketRegistered":
             actor_id = getattr(event, "reporter_id", None)
             entity_type = "ticket"

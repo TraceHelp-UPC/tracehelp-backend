@@ -6,7 +6,10 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.iam.application.authentication_service import AuthenticationService
 from app.iam.application.user_admin_service import UserAdministrationService
+from app.iam.application.workspace_settings_service import WorkspaceSettingsService
 from app.iam.infrastructure.persistence.user_repository import SqlAlchemyUserRepository
+from app.iam.infrastructure.persistence.workspace_settings_cache import get_workspace_settings_cache
+from app.iam.infrastructure.persistence.workspace_settings_repository import SqlAlchemyWorkspaceSettingsRepository
 from app.iam.infrastructure.security.bcrypt_password_hasher import BcryptPasswordHasher
 from app.iam.infrastructure.security.jwt_token_provider import JwtTokenProvider
 from app.iam.infrastructure.security.temporary_password_generator import SecretsTemporaryPasswordGenerator
@@ -50,5 +53,18 @@ def get_user_administration_service(
         users=SqlAlchemyUserRepository(db),
         hasher=BcryptPasswordHasher(),
         password_generator=SecretsTemporaryPasswordGenerator(),
+        events=bus,
+    )
+
+
+def get_workspace_settings_service(
+    db: Session = Depends(get_db),
+    bus: InMemoryEventBus = Depends(get_event_bus),
+) -> WorkspaceSettingsService:
+    return WorkspaceSettingsService(
+        session=db,
+        settings_repository=SqlAlchemyWorkspaceSettingsRepository(db),
+        users=SqlAlchemyUserRepository(db),
+        cache=get_workspace_settings_cache(),
         events=bus,
     )
