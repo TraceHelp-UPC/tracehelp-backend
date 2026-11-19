@@ -417,3 +417,9 @@ def step_ticket_id(context):
 def step_closed_detail(context):
     detail = context.response.json()["detail"]
     assert detail.startswith("El ticket TK-") and detail.endswith("está cerrado y ya no admite mensajes."), detail
+
+
+@then("the error detail mentions that the ticket is resolved")
+def step_resolved_detail(context):
+    detail = context.response.json()["detail"]
+    assert detail.startswith("El ticket TK-") and "está resuelto" in detail and "reábrelo" in detail, detail

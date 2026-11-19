@@ -191,12 +191,19 @@ class Ticket(AggregateRoot):
     ) -> TicketComment:
         """Registra un mensaje o nota interna de la conversación del ticket (US26) y emite MessagePosted.
 
-        No se admite en un ticket CLOSED. El límite de MAX_MESSAGE_LENGTH aplica solo aquí: la respuesta
-        validada del HITL se guarda con add_comment y puede ser más larga. El permiso para marcar una nota
-        interna es una regla de autorización y lo valida la capa de aplicación.
+        No se admite en un ticket RESOLVED ni CLOSED (enmienda D30): en ambos casos se lanza TicketClosedError
+        (HTTP 409). Para volver a escribir en un ticket resuelto, el colaborador debe reabrirlo (REOPENED).
+        El límite de MAX_MESSAGE_LENGTH aplica solo aquí: la respuesta validada del HITL se guarda con
+        add_comment y puede ser más larga. El permiso para marcar una nota interna es una regla de
+        autorización y lo valida la capa de aplicación.
         """
+        code = f" {self.code}" if self.code else ""
         if self.status is TicketStatus.CLOSED:
-            raise TicketClosedError(f"El ticket {self.code} está cerrado y ya no admite mensajes.")
+            raise TicketClosedError(f"El ticket{code} está cerrado y ya no admite mensajes.")
+        if self.status is TicketStatus.RESOLVED:
+            raise TicketClosedError(
+                f"El ticket{code} está resuelto y no admite mensajes; reábrelo si necesitas continuar la conversación."
+            )
         text = (content or "").strip()
         if not text:
             raise InvalidTicketDataError("El mensaje no puede estar vacío.")

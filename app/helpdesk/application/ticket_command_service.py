@@ -168,7 +168,7 @@ class TicketCommandService:
         """Publica un mensaje o nota interna en la conversación del ticket (US26, T85).
 
         Orden de validación: el ticket existe en el workspace (404), el actor lo ve (403), la nota interna está
-        permitida (403), el ticket no está CLOSED (409) y la longitud del texto (defensa del dominio).
+        permitida (403), el ticket no está RESOLVED ni CLOSED (409, D30) y la longitud del texto (defensa del dominio).
         Guarda el texto tal cual; no se envía nada a Gemini. Si un consumidor futuro envía mensajes al LLM,
         debe pasarlos por get_pii_masker().mask(...) y entregar SanitizedText. Publica MessagePosted (sin el
         texto) después del commit.
