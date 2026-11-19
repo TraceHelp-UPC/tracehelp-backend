@@ -271,17 +271,17 @@ class TriageDiagnosis(AggregateRoot):
     ) -> "TriageDiagnosis":
         """Registra el resultado de un análisis completo (evidencia evaluada y, si correspondía, respuesta de la IA)."""
         answered = outcome.answered and outcome.diagnosis is not None
-        if answered and evaluation.level is ConfidenceLevel.SELF_SERVICE:
+        sources: tuple[DiagnosisSource, ...] = ()
+        if answered:
+            numbers = {f.chunk_id: i for i, f in enumerate(evaluation.supporting, start=1)}
+            sources = tuple(_source(f, numbers[f.chunk_id]) for f in outcome.diagnosis.sources)
+
+        if answered and evaluation.level is ConfidenceLevel.SELF_SERVICE and sources:
             review = ReviewStatus.SELF_SERVICE_PROPOSED
         elif answered:
             review = ReviewStatus.PENDING_REVIEW
         else:
             review = ReviewStatus.NOT_APPLICABLE
-
-        sources: tuple[DiagnosisSource, ...] = ()
-        if answered:
-            numbers = {f.chunk_id: i for i, f in enumerate(evaluation.supporting, start=1)}
-            sources = tuple(_source(f, numbers[f.chunk_id]) for f in outcome.diagnosis.sources)
 
         diagnosis = cls(
             id=uuid.uuid4(),

@@ -4,26 +4,29 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.iam.application.workspace_settings_reader import WorkspaceSettingsReader
+from app.iam.infrastructure.persistence.workspace_settings_cache import get_workspace_settings_cache
+from app.iam.infrastructure.persistence.workspace_settings_repository import SqlAlchemyWorkspaceSettingsRepository
 from app.knowledge.infrastructure.retrieval import build_knowledge_retrieval_service
 from app.shared.infrastructure.event_bus import InMemoryEventBus, get_event_bus
 from app.shared.infrastructure.pii_masker import get_pii_masker
 from app.smart_triage.application.diagnosis_generation_service import DiagnosisGenerationService
 from app.smart_triage.application.evidence_retrieval_service import EvidenceRetrievalService
-from app.smart_triage.domain.grounding import GroundingThresholds
+from app.smart_triage.infrastructure.iam.iam_rag_parameters import IamRagParametersProvider
 from app.smart_triage.infrastructure.knowledge.knowledge_context_retriever import KnowledgeContextRetriever
 from app.smart_triage.infrastructure.llm.gemini_diagnosis_adapter import GeminiDiagnosisAdapter
 
 
 def build_evidence_retrieval_service(session: Session, events: InMemoryEventBus) -> EvidenceRetrievalService:
-    settings = get_settings()
+    reader = WorkspaceSettingsReader(
+        SqlAlchemyWorkspaceSettingsRepository(session),
+        cache=get_workspace_settings_cache(),
+    )
     return EvidenceRetrievalService(
         retriever=KnowledgeContextRetriever(build_knowledge_retrieval_service(session)),
         masker=get_pii_masker(),
         events=events,
-        thresholds=GroundingThresholds(
-            similarity=settings.similarity_threshold, self_service=settings.self_service_threshold
-        ),
-        top_k=settings.retrieval_top_k,
+        parameters=IamRagParametersProvider(reader),
     )
 
 
