@@ -169,6 +169,17 @@ class AuditEventHandler:
                 "new_priority": str(getattr(event, "new_priority", "")) if getattr(event, "new_priority", None) else None,
                 "reason": self._mask_text(getattr(event, "reason", None)),
             }
+        elif event_type == "MessagePosted":
+            # Rama explícita: nunca copia campos de más. El texto del mensaje no viaja en el evento ni se audita (D22)
+            actor_id = getattr(event, "author_id", None)
+            entity_type = "ticket_message"
+            entity_id = getattr(event, "message_id", None)
+            detail = {
+                "is_internal_note": bool(getattr(event, "is_internal_note", False)),
+                "author_is_reporter": bool(getattr(event, "author_is_reporter", False)),
+                "ticket_status": str(getattr(event, "ticket_status", "")),
+                "content_length": getattr(event, "content_length", None),
+            }
         elif event_type == "TicketAssigned":
             actor_id = getattr(event, "assigned_by", None)
             entity_type = "ticket"
