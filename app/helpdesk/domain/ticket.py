@@ -5,8 +5,20 @@ from datetime import UTC, datetime
 
 from app.helpdesk.domain.enums import ImpactLevel, SupportTier, TicketCategory, TicketPriority, TicketStatus
 from app.helpdesk.domain import state_machine
-from app.helpdesk.domain.events import MessagePosted, TicketClassificationCorrected, TicketRegistered, TicketStatusChanged
-from app.helpdesk.domain.exceptions import InvalidTicketDataError, TicketClosedError
+from app.helpdesk.domain.events import (
+    MessagePosted,
+    SelfServiceAccepted,
+    SelfServiceRejected,
+    TicketClassificationCorrected,
+    TicketRegistered,
+    TicketStatusChanged,
+)
+from app.helpdesk.domain.exceptions import (
+    InvalidTicketDataError,
+    InvalidTicketStateTransitionError,
+    TicketClosedError,
+    TicketStatusChangeForbiddenError,
+)
 from app.helpdesk.domain.value_objects import VisualEvidence
 from app.shared.domain.aggregate_root import AggregateRoot
 
@@ -336,6 +348,62 @@ class Ticket(AggregateRoot):
                 new_category=self.category.value if self.category else None,
                 previous_priority=prev_priority,
                 new_priority=self.priority.value,
+                reason=clean_reason,
+            )
+        )
+
+    def accept_self_service(self, *, reporter_id: uuid.UUID) -> None:
+        """El colaborador confirma que la recomendación de autoservicio resolvió el incidente (US12, T76)."""
+        if reporter_id != self.reporter_id:
+            raise TicketStatusChangeForbiddenError(
+                "Solo el colaborador que reportó el incidente puede responder a la recomendación de autoservicio."
+            )
+        if self.status is not TicketStatus.SELF_SERVICE_PROPOSED:
+            raise InvalidTicketStateTransitionError(
+                f"El ticket debe estar en SELF_SERVICE_PROPOSED para aceptar el autoservicio "
+                f"(estado actual: {self.status.value})."
+            )
+        self.current_tier = SupportTier.SELF_SERVICE
+        self.change_status(
+            TicketStatus.RESOLVED,
+            changed_by=reporter_id,
+            reason="Solución de autoservicio confirmada por el colaborador",
+        )
+        self.record_event(
+            SelfServiceAccepted(
+                ticket_id=self.id,
+                workspace_id=self.workspace_id,
+                reporter_id=reporter_id,
+            )
+        )
+
+    def reject_self_service(self, *, reporter_id: uuid.UUID, reason: str | None = None) -> None:
+        """El colaborador rechaza la recomendación de autoservicio y deriva el caso a soporte L1 (US12, T76)."""
+        if reporter_id != self.reporter_id:
+            raise TicketStatusChangeForbiddenError(
+                "Solo el colaborador que reportó el incidente puede responder a la recomendación de autoservicio."
+            )
+        if self.status is not TicketStatus.SELF_SERVICE_PROPOSED:
+            raise InvalidTicketStateTransitionError(
+                f"El ticket debe estar en SELF_SERVICE_PROPOSED para rechazar el autoservicio "
+                f"(estado actual: {self.status.value})."
+            )
+        clean_reason = (reason or "").strip() or None
+        if clean_reason and len(clean_reason) > MAX_REASON_LENGTH:
+            raise InvalidTicketDataError(f"El motivo no puede superar los {MAX_REASON_LENGTH} caracteres.")
+        status_reason = (
+            clean_reason or "El colaborador indicó que la recomendación de autoservicio no resolvió el incidente"
+        )
+        self.change_status(
+            TicketStatus.PENDING_ASSIGNMENT,
+            changed_by=reporter_id,
+            reason=status_reason,
+        )
+        self.record_event(
+            SelfServiceRejected(
+                ticket_id=self.id,
+                workspace_id=self.workspace_id,
+                reporter_id=reporter_id,
                 reason=clean_reason,
             )
         )
