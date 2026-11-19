@@ -144,6 +144,14 @@ class TriageDiagnosis(AggregateRoot):
     def can_review(self, decision: ReviewDecision) -> bool:
         return self.review_status in _ALLOWED[decision]
 
+    def reopen_for_analyst_review(self) -> bool:
+        """Cuando el colaborador rechaza el autoservicio, habilita la validación HITL del analista (US12, D10)."""
+        if self.review_status is not ReviewStatus.SELF_SERVICE_PROPOSED:
+            return False
+        self.review_status = ReviewStatus.PENDING_REVIEW
+        self.updated_at = _now()
+        return True
+
     def ensure_can_review(self, decision: ReviewDecision) -> None:
         if self.can_review(decision):
             return
@@ -271,17 +279,17 @@ class TriageDiagnosis(AggregateRoot):
     ) -> "TriageDiagnosis":
         """Registra el resultado de un análisis completo (evidencia evaluada y, si correspondía, respuesta de la IA)."""
         answered = outcome.answered and outcome.diagnosis is not None
-        if answered and evaluation.level is ConfidenceLevel.SELF_SERVICE:
+        sources: tuple[DiagnosisSource, ...] = ()
+        if answered:
+            numbers = {f.chunk_id: i for i, f in enumerate(evaluation.supporting, start=1)}
+            sources = tuple(_source(f, numbers[f.chunk_id]) for f in outcome.diagnosis.sources)
+
+        if answered and evaluation.level is ConfidenceLevel.SELF_SERVICE and sources:
             review = ReviewStatus.SELF_SERVICE_PROPOSED
         elif answered:
             review = ReviewStatus.PENDING_REVIEW
         else:
             review = ReviewStatus.NOT_APPLICABLE
-
-        sources: tuple[DiagnosisSource, ...] = ()
-        if answered:
-            numbers = {f.chunk_id: i for i, f in enumerate(evaluation.supporting, start=1)}
-            sources = tuple(_source(f, numbers[f.chunk_id]) for f in outcome.diagnosis.sources)
 
         diagnosis = cls(
             id=uuid.uuid4(),

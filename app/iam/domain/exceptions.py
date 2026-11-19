@@ -44,3 +44,7 @@ class SpecialistGroupNotAllowedError(DomainError):
 
 class SelfLockoutError(DomainError):
     """El líder intenta quitarse su propio rol o desactivar su propia cuenta (se traduce a HTTP 422)."""
+
+
+class InvalidWorkspaceSettingsError(DomainError):
+    """Parámetros de configuración del workspace fuera de rango o incoherentes (se traduce a HTTP 422)."""

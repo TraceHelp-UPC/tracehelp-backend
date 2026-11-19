@@ -178,26 +178,50 @@ def test_unknown_ticket_returns_404(api_client, people):
     assert response.json()["type"] == "urn:tracehelp:problems:ticket-not-found"
 
 
+@pytest.mark.parametrize("status", [S.RESOLVED, S.CLOSED])
 @pytest.mark.parametrize("who", ["collaborator", "analyst"])
-def test_closed_ticket_rejects_messages_with_409(api_client, db_session, people, make_ticket, who):
-    ticket = make_ticket(S.CLOSED)
+def test_resolved_or_closed_ticket_rejects_messages_with_409(api_client, db_session, people, make_ticket, status, who):
+    ticket = make_ticket(status)
     response = _post(api_client, people, ticket, who)
+
+    assert response.status_code == 409
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["type"] == "urn:tracehelp:problems:ticket-closed"
+    assert db_session.query(TicketCommentModel).filter_by(ticket_id=ticket.id).count() == 0
+
+
+def test_analyst_cannot_post_internal_note_in_resolved_ticket(api_client, db_session, people, make_ticket):
+    ticket = make_ticket(S.RESOLVED)
+    response = _post(api_client, people, ticket, "analyst", "Nota tardía", is_internal_note=True)
 
     assert response.status_code == 409
     assert response.json()["type"] == "urn:tracehelp:problems:ticket-closed"
     assert db_session.query(TicketCommentModel).filter_by(ticket_id=ticket.id).count() == 0
 
 
-def test_closed_ticket_can_still_be_read(api_client, people, make_ticket):
-    ticket = make_ticket(S.CLOSED)
+@pytest.mark.parametrize("status", [S.RESOLVED, S.CLOSED])
+def test_resolved_or_closed_ticket_can_still_be_read(api_client, people, make_ticket, status):
+    ticket = make_ticket(status)
     assert api_client.get(_url(ticket.id), headers=people["headers"]["collaborator"]).status_code == 200
 
 
-def test_writing_in_resolved_ticket_does_not_reopen_it(api_client, people, make_ticket):
+def test_reopening_resolved_ticket_allows_posting_messages_again(api_client, people, make_ticket):
     ticket = make_ticket(S.RESOLVED)
-    assert _post(api_client, people, ticket, "collaborator").status_code == 201
+    blocked = _post(api_client, people, ticket, "collaborator", "Sigue fallando")
+    assert blocked.status_code == 409
+    assert blocked.json()["type"] == "urn:tracehelp:problems:ticket-closed"
+
+    reopen = api_client.patch(
+        f"/api/v1/tickets/{ticket.id}/status",
+        json={"status": "REOPENED", "reason": "El problema persiste"},
+        headers=people["headers"]["collaborator"],
+    )
+    assert reopen.status_code == 200, reopen.text
+
+    allowed = _post(api_client, people, ticket, "collaborator", "Adjunto nuevos detalles")
+    assert allowed.status_code == 201, allowed.text
     detail = api_client.get(f"/api/v1/tickets/{ticket.id}", headers=people["headers"]["collaborator"]).json()
-    assert detail["status"] == "RESOLVED"
+    assert detail["status"] == "REOPENED"
 
 
 @pytest.mark.parametrize("content", ["", "   ", "\n\t"])

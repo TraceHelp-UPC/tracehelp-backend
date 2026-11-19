@@ -1,7 +1,7 @@
 """Tabla helpdesk_notifications para notificaciones de estado y mensajes (US19, T91)
 
 Revision ID: 0013
-Revises: 0010
+Revises: 0012
 Create Date: 2026-11-19 18:00:00.000000+00:00
 """
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "0013"
-down_revision: str | None = "0010"
+down_revision: str | None = "0012"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -125,3 +125,21 @@ class IUserNames(ABC):
     @abstractmethod
     def display_names(self, user_ids) -> dict[uuid.UUID, str]:
         """Nombre completo por id de usuario."""
+
+
+@dataclass(frozen=True)
+class RagParameters:
+    """Parámetros RAG vigentes para un workspace (US07, T62)."""
+
+    similarity_threshold: float
+    self_service_threshold: float
+    retrieval_top_k: int
+    strict_grounding: bool = True
+
+
+class IRagParametersProvider(ABC):
+    """Lectura de parámetros RAG por workspace (anticorruption layer hacia IAM)."""
+
+    @abstractmethod
+    def for_workspace(self, workspace_id: uuid.UUID) -> RagParameters:
+        """Devuelve los parámetros RAG vigentes del workspace."""

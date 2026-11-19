@@ -78,27 +78,20 @@ Feature: Ticket conversation
     Then the response status is 201
     And the response content equals the text that was sent
 
-  Scenario Outline: Messages are accepted in every status except CLOSED
+  Scenario Outline: Messages are accepted in every status except RESOLVED and CLOSED
     Given the ticket is in status "<status>"
     When the "COLLABORATOR" posts the message "Consulta en estado <status>"
     Then the response status is 201
     And the ticket status is "<status>"
 
     Examples:
-      | status               |
-      | OPEN                 |
+      | status                |
+      | OPEN                  |
       | SELF_SERVICE_PROPOSED |
-      | PENDING_ASSIGNMENT   |
-      | ASSIGNED_L1          |
-      | ESCALATED_L2         |
-      | RESOLVED             |
-      | REOPENED             |
-
-  Scenario: Writing on a resolved ticket does not reopen it
-    Given the ticket is in status "RESOLVED"
-    When the "COLLABORATOR" posts the message "Gracias, todo bien"
-    Then the response status is 201
-    And the ticket status is "RESOLVED"
+      | PENDING_ASSIGNMENT    |
+      | ASSIGNED_L1           |
+      | ESCALATED_L2          |
+      | REOPENED              |
 
   Scenario: A support member who is not the assignee can write
     Given the ticket is in status "ESCALATED_L2"
@@ -174,7 +167,7 @@ Feature: Ticket conversation
     Then the response status is 200
     And the thread contains the AI reply marked as "true" with 2500 characters
 
-  # ------------------------------------------------------------------ US26, criterio 3: ticket cerrado
+  # ------------------------------------------------------------------ US26, criterio 3: ticket resuelto o cerrado (D30)
   Scenario: Nobody can write on a closed ticket
     Given the ticket is in status "CLOSED"
     When the "COLLABORATOR" posts the message "¿Puedo agregar algo?"
@@ -188,18 +181,53 @@ Feature: Ticket conversation
     Then the response status is 409
     And the stored message count of the ticket is 0
 
-  Scenario: A closed ticket can still be read
+  Scenario: Nobody can write on a resolved ticket (D30)
+    Given the ticket is in status "RESOLVED"
+    When the "COLLABORATOR" posts the message "¿Puedo agregar algo?"
+    Then the response status is 409
+    And the problem type is "ticket-closed"
+    And the error detail mentions that the ticket is resolved
+    And the ticket status is "RESOLVED"
+    When the "ANALYST_L1" posts the message "Resuelto"
+    Then the response status is 409
+    And the problem type is "ticket-closed"
+    When the "ANALYST_L1" posts the internal note "Nota tardía"
+    Then the response status is 409
+    And the stored message count of the ticket is 0
+
+  Scenario: Reopening a resolved ticket allows posting messages again
+    Given the ticket is in status "RESOLVED"
+    When the "COLLABORATOR" posts the message "Sigue fallando"
+    Then the response status is 409
+    And the problem type is "ticket-closed"
+    When the "COLLABORATOR" changes the ticket status to "REOPENED"
+    Then the response status is 200
+    When the "COLLABORATOR" posts the message "Adjunto nuevos detalles del error"
+    Then the response status is 201
+    And the ticket status is "REOPENED"
+
+  Scenario Outline: A resolved or closed ticket can still be read
     Given the ticket already has 2 messages from the collaborator
-    And the ticket is in status "CLOSED"
+    And the ticket is in status "<status>"
     When the "COLLABORATOR" requests the messages of the ticket
     Then the response status is 200
     And the thread reports 2 messages in 1 pages
 
-  Scenario: The collaborator marking an internal note on a closed ticket gets 403 first
-    Given the ticket is in status "CLOSED"
+    Examples:
+      | status   |
+      | RESOLVED |
+      | CLOSED   |
+
+  Scenario Outline: The collaborator marking an internal note on a resolved or closed ticket gets 403 first
+    Given the ticket is in status "<status>"
     When the "COLLABORATOR" posts the internal note "Privado"
     Then the response status is 403
     And the problem type is "internal-note-not-allowed"
+
+    Examples:
+      | status   |
+      | RESOLVED |
+      | CLOSED   |
 
   # ------------------------------------------------------------------ Validación (422)
   Scenario Outline: An empty or blank message is rejected
