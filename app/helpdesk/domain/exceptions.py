@@ -36,3 +36,7 @@ class InternalNoteNotAllowedError(DomainError):
 
 class TicketClosedError(DomainError):
     """El ticket está CLOSED y ya no admite mensajes (HTTP 409)."""
+
+
+class NotificationNotFoundError(ResourceNotFoundError):
+    """La notificación no existe o pertenece a otro usuario (HTTP 404)."""

@@ -33,3 +33,40 @@ class IAnalystAvailabilityReader(ABC):
     @abstractmethod
     def get_candidate(self, analyst_id: uuid.UUID) -> AnalystAssignmentCandidate | None:
         """Devuelve los datos del candidato de asignación o None si no existe."""
+
+
+@dataclass(frozen=True)
+class EmailMessage:
+    to: str
+    subject: str
+    text_body: str
+
+
+class IEmailSender(ABC):
+    """Puerto de envío de correos para notificaciones (US19, T91, D14)."""
+
+    @abstractmethod
+    def send(self, message: EmailMessage) -> None:
+        """Envía el correo de notificación."""
+
+
+@dataclass(frozen=True)
+class NotificationRecipientProfile:
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    email: str
+    full_name: str
+    is_active: bool
+    notify_inapp: bool
+    notify_email: bool
+
+
+class INotificationRecipients(ABC):
+    """Puerto ACL hacia IAM para consultar el perfil y canales habilitados de un destinatario (US19, T91)."""
+
+    @abstractmethod
+    def notification_profile(self, user_id: uuid.UUID) -> NotificationRecipientProfile | None:
+        """Devuelve el perfil y preferencias de notificación del usuario o None si no existe."""
+
+    def profile(self, user_id: uuid.UUID) -> NotificationRecipientProfile | None:
+        return self.notification_profile(user_id)

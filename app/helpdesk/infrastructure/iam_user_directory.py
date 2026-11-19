@@ -8,14 +8,19 @@ from collections.abc import Iterable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.helpdesk.application.ports import AnalystAssignmentCandidate, IAnalystAvailabilityReader
+from app.helpdesk.application.ports import (
+    AnalystAssignmentCandidate,
+    IAnalystAvailabilityReader,
+    INotificationRecipients,
+    NotificationRecipientProfile,
+)
 from app.helpdesk.application.ticket_queries import IUserDirectory
 from app.iam.domain.enums import AvailabilityStatus, UserStatus
 from app.iam.domain.user import SUPPORT_ROLES
 from app.iam.infrastructure.persistence.models import UserModel
 
 
-class IamUserDirectory(IUserDirectory, IAnalystAvailabilityReader):
+class IamUserDirectory(IUserDirectory, IAnalystAvailabilityReader, INotificationRecipients):
     def __init__(self, session: Session) -> None:
         self._session = session
 
@@ -37,4 +42,18 @@ class IamUserDirectory(IUserDirectory, IAnalystAvailabilityReader):
             is_active=model.status is UserStatus.ACTIVE,
             is_support_staff=model.role in SUPPORT_ROLES,
             is_available=model.availability_status is AvailabilityStatus.AVAILABLE,
+        )
+
+    def notification_profile(self, user_id: uuid.UUID) -> NotificationRecipientProfile | None:
+        model = self._session.get(UserModel, user_id)
+        if model is None:
+            return None
+        return NotificationRecipientProfile(
+            id=model.id,
+            workspace_id=model.workspace_id,
+            email=model.email,
+            full_name=model.full_name,
+            is_active=model.status is UserStatus.ACTIVE,
+            notify_inapp=bool(model.notify_inapp),
+            notify_email=bool(model.notify_email),
         )

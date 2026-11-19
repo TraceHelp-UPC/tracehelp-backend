@@ -55,8 +55,16 @@ class Settings(BaseSettings):
     job_auto_close_resolved_tickets_interval_seconds: int = 3600  # T88
     job_knowledge_gap_analysis_interval_seconds: int = 86400  # T100
 
-    # Notificaciones
+    # Notificaciones (US19, T91; D14: log por defecto o smtp; resend_api_key sin uso)
     resend_api_key: str = ""
+    email_backend: str = "log"
+    email_from: str = "TraceHelp <no-reply@example.com>"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
+    portal_base_url: str = ""
 
     @field_validator("database_url")
     @classmethod

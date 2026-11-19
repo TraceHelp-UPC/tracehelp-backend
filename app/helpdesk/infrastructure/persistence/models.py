@@ -5,8 +5,22 @@ Las tablas de escalamientos, calificaciones y notificaciones se agregan en el Sp
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Identity, Index, Integer, LargeBinary, String, Text, func, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Identity,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    func,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, deferred, mapped_column, relationship
 
 from app.core.database import Base
@@ -110,3 +124,30 @@ class TicketCommentModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     ticket: Mapped[TicketModel] = relationship(back_populates="comments")
+
+
+class NotificationModel(Base):
+    __tablename__ = "helpdesk_notifications"
+    __table_args__ = (
+        CheckConstraint(
+            "type IN ('TICKET_STATUS_CHANGED','MESSAGE_POSTED','ESCALATED_TICKET_RESOLVED')",
+            name="ck_helpdesk_notifications_type",
+        ),
+        Index("ix_helpdesk_notifications_recipient_created", "recipient_id", text("created_at DESC")),
+        Index(
+            "ix_helpdesk_notifications_recipient_unread",
+            "recipient_id",
+            postgresql_where=text("read_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("iam_workspaces.id"), nullable=False)
+    recipient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("iam_users.id", ondelete="CASCADE"), nullable=False)
+    ticket_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("helpdesk_tickets.id", ondelete="CASCADE"), nullable=False)
+    type: Mapped[str] = mapped_column(String(40), nullable=False)
+    title: Mapped[str] = mapped_column(String(150), nullable=False)
+    body: Mapped[str] = mapped_column(String(500), nullable=False)
+    data: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

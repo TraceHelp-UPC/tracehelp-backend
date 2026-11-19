@@ -188,3 +188,32 @@ class UpdateUserRequest(BaseModel):
             if name in self.model_fields_set and getattr(self, name) is None:
                 raise ValueError(f"{name} no puede ser null.")
         return self
+
+
+# ----------------------------------------------------------------------------- preferencias de notificación (US19)
+class NotificationPreferencesResponse(BaseModel):
+    notify_inapp: bool = Field(..., description="Notificaciones dentro de la aplicación", examples=[True])
+    notify_email: bool = Field(..., description="Notificaciones por correo electrónico", examples=[True])
+
+    @classmethod
+    def from_domain(cls, user: User) -> "NotificationPreferencesResponse":
+        return cls(notify_inapp=user.notify_inapp, notify_email=user.notify_email)
+
+
+class UpdateNotificationPreferencesRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"notify_email": False}, {"notify_inapp": True, "notify_email": True}]},
+    )
+
+    notify_inapp: StrictBool | None = Field(None, description="Activar o desactivar notificaciones en la aplicación")
+    notify_email: StrictBool | None = Field(None, description="Activar o desactivar notificaciones por correo")
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "UpdateNotificationPreferencesRequest":
+        if not self.model_fields_set:
+            raise ValueError("Envía al menos un canal de notificación para actualizar.")
+        for name in ("notify_inapp", "notify_email"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"{name} no puede ser null.")
+        return self

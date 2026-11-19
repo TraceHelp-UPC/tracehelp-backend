@@ -196,6 +196,24 @@ class User(AggregateRoot):
             UserProfileUpdated(user_id=self.id, workspace_id=self.workspace_id, changed_by=changed_by, changes=changes)
         )
 
+    def update_notification_preferences(
+        self,
+        *,
+        notify_inapp: bool | None = None,
+        notify_email: bool | None = None,
+        changed_by: uuid.UUID | None = None,
+    ) -> None:
+        """Actualiza los canales de notificación (US19) y publica UserProfileUpdated solo si hubo cambios."""
+        changes: dict[str, dict[str, str | None]] = {}
+        if notify_inapp is not None and notify_inapp != self.notify_inapp:
+            changes["notify_inapp"] = {"from": str(self.notify_inapp).lower(), "to": str(notify_inapp).lower()}
+            self.notify_inapp = notify_inapp
+        if notify_email is not None and notify_email != self.notify_email:
+            changes["notify_email"] = {"from": str(self.notify_email).lower(), "to": str(notify_email).lower()}
+            self.notify_email = notify_email
+        if changes:
+            self._record_profile_change(changed_by, changes)
+
     def set_availability(self, availability: AvailabilityStatus) -> None:
         """Disponibilidad para la asignación automática de tickets (US24). Solo aplica a analistas y especialistas."""
         if not self.is_support_staff:

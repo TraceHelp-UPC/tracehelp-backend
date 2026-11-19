@@ -57,3 +57,14 @@ class MessagePosted(DomainEvent):
     is_internal_note: bool
     ticket_status: str
     content_length: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class EscalatedTicketResolved(DomainEvent):
+    """Un especialista L2 resolvió un ticket escalado (US25/D08). Creado en T91 y emitido en T82."""
+
+    ticket_id: uuid.UUID
+    workspace_id: uuid.UUID
+    reporter_id: uuid.UUID
+    resolved_by: uuid.UUID
+    escalated_group: str | None = None
