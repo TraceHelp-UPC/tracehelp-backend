@@ -1,12 +1,21 @@
-"""Modelos ORM del contexto IAM (tablas iam_*).
-
-Por ahora solo workspaces y usuarios, necesarios para las llaves foráneas de Helpdesk.
-La lógica de dominio de IAM se implementa en la T05.
-"""
+"""Modelos ORM del contexto IAM (tablas iam_*)."""
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Index, String, func, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Numeric,
+    SmallInteger,
+    String,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -57,3 +66,44 @@ class UserModel(Base):
     external_ad_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WorkspaceSettingsModel(Base):
+    """Configuración por workspace (US07 RAG, US08 reglas de negocio). Todas las columnas de ajuste son nullable."""
+
+    __tablename__ = "iam_workspace_settings"
+    __table_args__ = (
+        CheckConstraint(
+            "similarity_threshold IS NULL OR similarity_threshold BETWEEN 0.50 AND 0.95",
+            name="similarity_threshold_range",
+        ),
+        CheckConstraint(
+            "self_service_threshold IS NULL OR self_service_threshold <= 0.99",
+            name="self_service_threshold_max",
+        ),
+        CheckConstraint(
+            "self_service_threshold IS NULL OR similarity_threshold IS NULL "
+            "OR self_service_threshold >= similarity_threshold",
+            name="self_service_ge_similarity",
+        ),
+        CheckConstraint(
+            "retrieval_top_k IS NULL OR retrieval_top_k BETWEEN 1 AND 10",
+            name="retrieval_top_k_range",
+        ),
+    )
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("iam_workspaces.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    similarity_threshold: Mapped[Decimal | None] = mapped_column(Numeric(3, 2), nullable=True)
+    self_service_threshold: Mapped[Decimal | None] = mapped_column(Numeric(3, 2), nullable=True)
+    retrieval_top_k: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    strict_grounding: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("iam_users.id", ondelete="SET NULL"),
+        nullable=True,
+    )

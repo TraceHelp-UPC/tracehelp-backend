@@ -1,6 +1,7 @@
 """Eventos de dominio del contexto IAM."""
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from app.iam.domain.enums import RoleName
 from app.shared.domain.aggregate_root import DomainEvent
@@ -52,3 +53,13 @@ class UserReactivated(DomainEvent):
     user_id: uuid.UUID
     workspace_id: uuid.UUID
     changed_by: uuid.UUID | None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ConfigurationChanged(DomainEvent):
+    """El Líder de TI cambió la configuración del workspace (US07 rag, US08 business_rules)."""
+
+    workspace_id: uuid.UUID
+    changed_by: uuid.UUID
+    section: str  # "rag" | "business_rules"
+    changes: dict[str, dict[str, Any]]  # {"similarity_threshold": {"old": 0.68, "new": 0.72}, ...}

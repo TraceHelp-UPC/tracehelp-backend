@@ -1,7 +1,7 @@
 """Configuración central de la aplicación, leída desde variables de entorno (.env)."""
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -42,10 +42,11 @@ class Settings(BaseSettings):
     pii_audit_secret: str = "dev-only-pii-secret-cambiar-en-el-env-0123456789"
     pii_spacy_model: str = "es_core_news_sm"
 
-    # Recuperación y evaluación de evidencia (T30). Los umbrales se calibran en T33.
+    # Recuperación y evaluación de evidencia (T30, calibrados en T33; sobrescribibles por workspace en T62).
     similarity_threshold: float = 0.68  # mínimo para usar un fragmento como fuente de la respuesta
     self_service_threshold: float = 0.80  # mínimo para proponer autoservicio al colaborador
     retrieval_top_k: int = 5  # fragmentos que se recuperan por consulta
+    strict_grounding: bool = True  # exige al menos una cita válida para aceptar la respuesta de la IA
 
     # Scheduler de tareas periódicas (T60). Las pruebas lo desactivan. Un intervalo <= 0 apaga el job.
     scheduler_enabled: bool = True
@@ -67,6 +68,23 @@ class Settings(BaseSettings):
         if value.startswith("postgresql://"):
             value = "postgresql+psycopg://" + value.removeprefix("postgresql://")
         return value
+
+    @model_validator(mode="after")
+    def validate_rag_defaults(self) -> "Settings":
+        """Valida al arrancar que los valores RAG por defecto cumplan los rangos de US07 (T62)."""
+        from app.iam.domain.exceptions import InvalidWorkspaceSettingsError
+        from app.iam.domain.workspace_settings import RagSettings
+
+        try:
+            RagSettings(
+                similarity_threshold=self.similarity_threshold,
+                self_service_threshold=self.self_service_threshold,
+                retrieval_top_k=self.retrieval_top_k,
+                strict_grounding=self.strict_grounding,
+            )
+        except InvalidWorkspaceSettingsError as exc:
+            raise ValueError(f"Configuración RAG por defecto no válida: {exc.detail}") from exc
+        return self
 
 
 @lru_cache
