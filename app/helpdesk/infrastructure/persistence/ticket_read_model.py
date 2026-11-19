@@ -12,12 +12,13 @@ from sqlalchemy.orm import Session, undefer
 from app.helpdesk.application.ticket_queries import (
     EvidenceFile,
     ITicketReadModel,
+    MessageView,
     TicketOrder,
     TicketSearchCriteria,
     TicketSummary,
 )
 from app.helpdesk.domain.enums import TicketPriority
-from app.helpdesk.infrastructure.persistence.models import TicketEvidenceModel, TicketModel
+from app.helpdesk.infrastructure.persistence.models import TicketCommentModel, TicketEvidenceModel, TicketModel
 from app.shared.domain.pagination import Page, PageRequest
 
 _CODE = re.compile(r"^(?:tk-?)?0*(\d{1,9})$", re.I)
@@ -90,6 +91,41 @@ class SqlAlchemyTicketReadModel(ITicketReadModel):
                 created_at=r.created_at,
                 updated_at=r.updated_at,
                 category=r.category.value if r.category else None,
+            )
+            for r in rows
+        ]
+        return Page(items=items, page=page.page, size=page.size, total=total)
+
+    def messages(self, ticket_id: uuid.UUID, include_internal: bool, page: PageRequest) -> Page[MessageView]:
+        conditions = [TicketCommentModel.ticket_id == ticket_id]
+        if not include_internal:
+            conditions.append(TicketCommentModel.is_internal_note.is_(False))
+        total = self._session.scalar(select(func.count()).select_from(TicketCommentModel).where(*conditions)) or 0
+        page.ensure_in_range(total)
+        rows = self._session.execute(
+            select(
+                TicketCommentModel.id,
+                TicketCommentModel.ticket_id,
+                TicketCommentModel.author_id,
+                TicketCommentModel.content,
+                TicketCommentModel.is_internal_note,
+                TicketCommentModel.is_ai_generated,
+                TicketCommentModel.created_at,
+            )
+            .where(*conditions)
+            .order_by(TicketCommentModel.created_at.asc(), TicketCommentModel.id.asc())
+            .offset(page.offset)
+            .limit(page.size)
+        ).all()
+        items = [
+            MessageView(
+                id=r.id,
+                ticket_id=r.ticket_id,
+                author_id=r.author_id,
+                content=r.content,
+                is_internal_note=r.is_internal_note,
+                is_ai_generated=r.is_ai_generated,
+                created_at=r.created_at,
             )
             for r in rows
         ]

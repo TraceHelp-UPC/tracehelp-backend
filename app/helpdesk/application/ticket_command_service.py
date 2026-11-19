@@ -7,18 +7,21 @@ from sqlalchemy.orm import Session
 
 from app.helpdesk.application import status_change_policy
 from app.helpdesk.application.ports import IAnalystAvailabilityReader, IImageProcessor
+from app.helpdesk.application.ticket_queries import IUserDirectory
 from app.helpdesk.application.status_change_policy import Actor
 from app.helpdesk.domain import state_machine
 from app.helpdesk.domain.enums import ImpactLevel, TicketCategory, TicketPriority, TicketStatus
 from app.helpdesk.domain.exceptions import (
+    InternalNoteNotAllowedError,
     InvalidTicketDataError,
     InvalidTicketStateTransitionError,
     InvalidVisualEvidenceError,
+    TicketAccessDeniedError,
     TicketNotFoundError,
     TicketStatusChangeForbiddenError,
 )
 from app.helpdesk.domain.repositories import ITicketRepository
-from app.helpdesk.domain.ticket import Ticket
+from app.helpdesk.domain.ticket import Ticket, TicketComment
 from app.helpdesk.domain.value_objects import MAX_EVIDENCE_BYTES, VisualEvidence
 from app.iam.domain.permissions import Permission
 from app.shared.infrastructure.event_bus import InMemoryEventBus
@@ -68,6 +71,24 @@ class AssignTicketCommand:
     reason: str | None = None
 
 
+@dataclass(frozen=True)
+class PostMessageCommand:
+    ticket_id: uuid.UUID
+    actor: Actor
+    content: str
+    is_internal_note: bool = False
+
+
+@dataclass(frozen=True)
+class PostedMessage:
+    """Resultado de publicar un mensaje: el comentario creado y lo que la API necesita para responder."""
+
+    ticket_id: uuid.UUID
+    comment: TicketComment
+    from_reporter: bool
+    author_name: str | None
+
+
 class TicketCommandService:
     def __init__(
         self,
@@ -76,12 +97,14 @@ class TicketCommandService:
         images: IImageProcessor,
         events: InMemoryEventBus,
         analysts: IAnalystAvailabilityReader | None = None,
+        users: IUserDirectory | None = None,
     ) -> None:
         self._session = session
         self._tickets = tickets
         self._images = images
         self._events = events
         self._analysts = analysts
+        self._users = users
 
     def register(self, command: RegisterTicketCommand) -> Ticket:
         """Registra un incidente con texto y capturas opcionales (US10, TS04) y publica TicketRegistered."""
@@ -140,6 +163,39 @@ class TicketCommandService:
         self._session.commit()
         self._events.publish_all(ticket.pull_events())
         return ticket
+
+    def post_message(self, command: PostMessageCommand) -> PostedMessage:
+        """Publica un mensaje o nota interna en la conversación del ticket (US26, T85).
+
+        Orden de validación: el ticket existe en el workspace (404), el actor lo ve (403), la nota interna está
+        permitida (403), el ticket no está CLOSED (409) y la longitud del texto (defensa del dominio).
+        Guarda el texto tal cual; no se envía nada a Gemini. Si un consumidor futuro envía mensajes al LLM,
+        debe pasarlos por get_pii_masker().mask(...) y entregar SanitizedText. Publica MessagePosted (sin el
+        texto) después del commit.
+        """
+        actor = command.actor
+        ticket = self._tickets.find_by_id(command.ticket_id)
+        if ticket is None or ticket.workspace_id != actor.workspace_id:
+            raise TicketNotFoundError("El ticket no existe.")
+        is_reporter = ticket.reporter_id == actor.id
+        if not actor.is_support_staff and not is_reporter:
+            raise TicketAccessDeniedError("No tienes acceso a este ticket: solo lo ven quien lo reportó y el equipo de soporte.")
+        if command.is_internal_note and not actor.is_support_staff:
+            raise InternalNoteNotAllowedError("Solo el equipo de soporte puede registrar notas internas.")
+
+        comment = ticket.post_message(
+            author_id=actor.id,
+            content=command.content,
+            is_internal_note=command.is_internal_note,
+            author_is_reporter=is_reporter,
+        )
+        self._tickets.save(ticket)
+        self._session.commit()
+        self._events.publish_all(ticket.pull_events())
+        names = self._users.display_names({actor.id}) if self._users is not None else {}
+        return PostedMessage(
+            ticket_id=ticket.id, comment=comment, from_reporter=is_reporter, author_name=names.get(actor.id)
+        )
 
     def assign_ticket(self, command: AssignTicketCommand) -> Ticket:
         """Asigna un ticket a un analista disponible o al propio analista que lo toma (US24, T47)."""
