@@ -6,6 +6,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from app.helpdesk.application.ports import SelfServiceRecommendation
 from app.helpdesk.application.ticket_queries import EvidenceFile, MessageView, TicketSummary
 from app.helpdesk.application.ticket_query_service import (
     MessageListing,
@@ -175,12 +176,85 @@ class CommentResponse(BaseModel):
     created_at: datetime
 
 
+class SelfServiceSourceResponse(BaseModel):
+    """Fuente citada en una recomendación de autoservicio, sin datos internos (US12)."""
+
+    reference: str = Field(..., examples=["F1"])
+    document_title: str = Field(..., examples=["Manual de Conectividad VPN"])
+    citation: str = Field(..., examples=["guia-vpn.md, sección «Error 809», párr. 1"])
+
+
+class SelfServiceRecommendationResponse(BaseModel):
+    """Recomendación de autoservicio expuesta al colaborador cuando el ticket está en SELF_SERVICE_PROPOSED (US12)."""
+
+    summary: str = Field(
+        ..., examples=["El error 809 ocurre cuando el router doméstico bloquea el protocolo L2TP/IPsec."]
+    )
+    steps: list[str] = Field(
+        ...,
+        examples=[
+            [
+                "Abre Configuración de red y selecciona el perfil VPN corporativo.",
+                "Cambia el tipo de protocolo a IKEv2 y guarda los cambios.",
+            ]
+        ],
+    )
+    match_percentage: int | None = Field(
+        None, ge=0, le=100, description="Porcentaje redondeado de coincidencia (0–100)", examples=[89]
+    )
+    confidence_label: str = Field(..., examples=["Alta coincidencia"])
+    sources: list[SelfServiceSourceResponse]
+
+    @classmethod
+    def from_recommendation(cls, rec: SelfServiceRecommendation) -> "SelfServiceRecommendationResponse":
+        return cls(
+            summary=rec.summary,
+            steps=list(rec.steps),
+            match_percentage=rec.match_percentage,
+            confidence_label=rec.confidence_label,
+            sources=[
+                SelfServiceSourceResponse(
+                    reference=s.reference,
+                    document_title=s.document_title,
+                    citation=s.citation,
+                )
+                for s in rec.sources
+            ],
+        )
+
+
+class RejectSelfServiceRequest(BaseModel):
+    """Motivo opcional del colaborador al rechazar una recomendación de autoservicio (US12)."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [{"reason": "Seguí los pasos pero el error 809 continúa apareciendo."}],
+        },
+    )
+
+    reason: Annotated[
+        str | None,
+        StringConstraints(strip_whitespace=True, max_length=MAX_REASON_LENGTH),
+    ] = Field(
+        None,
+        description=f"Motivo opcional del rechazo (máximo {MAX_REASON_LENGTH} caracteres)",
+    )
+
+
 class TicketDetailResponse(TicketResponse):
     """Detalle del ticket (W-05 y W-07): datos completos, nombres y comentarios visibles para el usuario."""
 
     reporter_name: str | None
     assigned_analyst_name: str | None
     comments: list[CommentResponse]
+    self_service_recommendation: SelfServiceRecommendationResponse | None = Field(
+        None,
+        description=(
+            "Recomendación de autoservicio disponible solo cuando el ticket está en SELF_SERVICE_PROPOSED "
+            "con citas válidas; null en cualquier otro estado o ante baja confianza."
+        ),
+    )
 
     @classmethod
     def from_detail(cls, detail: TicketDetail) -> "TicketDetailResponse":
@@ -199,11 +273,17 @@ class TicketDetailResponse(TicketResponse):
             for c in ticket.comments
             if detail.include_internal_notes or not c.is_internal_note
         ]
+        recommendation = (
+            SelfServiceRecommendationResponse.from_recommendation(detail.self_service_recommendation)
+            if detail.self_service_recommendation is not None
+            else None
+        )
         return cls(
             **base,
             reporter_name=names.get(ticket.reporter_id),
             assigned_analyst_name=names.get(ticket.assigned_analyst_id) if ticket.assigned_analyst_id else None,
             comments=comments,
+            self_service_recommendation=recommendation,
         )
 
 

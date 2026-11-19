@@ -10,11 +10,13 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 
 from app.helpdesk.application.status_change_policy import Actor
 from app.helpdesk.application.ticket_command_service import (
+    AcceptSelfServiceCommand,
     AssignTicketCommand,
     ChangeTicketStatusCommand,
     CorrectTicketClassificationCommand,
     PostMessageCommand,
     RegisterTicketCommand,
+    RejectSelfServiceCommand,
     TicketCommandService,
     UploadedFile,
 )
@@ -36,6 +38,7 @@ from app.helpdesk.interfaces.rest.schemas import (
     MessagePageResponse,
     MessageResponse,
     PostMessageRequest,
+    RejectSelfServiceRequest,
     TicketDetailResponse,
     TicketPageResponse,
     TicketResponse,
@@ -310,9 +313,11 @@ def get_ticket_detail(
     current_user: CurrentUser = Depends(get_current_user),
     service: TicketQueryService = Depends(get_ticket_query_service),
 ) -> TicketDetailResponse:
-    """Detalle con evidencias y comentarios (W-05, W-07). Lo ven quien lo reportó y el equipo de soporte.
+    """Detalle con evidencias, comentarios y recomendación de autoservicio (W-03, W-05, W-07).
 
-    Las notas internas solo se muestran al equipo de soporte.
+    Lo ven quien reportó el ticket y el equipo de soporte. Las notas internas solo se muestran al equipo
+    de soporte. El campo `self_service_recommendation` solo aparece cuando el ticket está en
+    `SELF_SERVICE_PROPOSED` con citas válidas; en cualquier otro estado o baja confianza es `null`.
     """
     return TicketDetailResponse.from_detail(service.detail(_actor(current_user), ticket_id))
 
@@ -493,3 +498,155 @@ def get_ticket_messages(
     """
     listing = service.messages(_actor(current_user), ticket_id, PageRequest(page=page, size=size))
     return MessagePageResponse.from_listing(listing)
+
+
+# --- Autoservicio (US12, T76) ---------------------------------------------------------------------------------
+
+def _self_service_problem(
+    status_code: int, slug: str, title: str, detail: str, path_suffix: str, description: str | None = None
+) -> dict:
+    return {
+        "description": description or title,
+        "content": {
+            "application/problem+json": {
+                "example": {
+                    "type": f"urn:tracehelp:problems:{slug}",
+                    "title": title,
+                    "status": status_code,
+                    "detail": detail,
+                    "instance": f"/api/v1/tickets/{_TICKET_ID_EXAMPLE}/self-service/{path_suffix}",
+                }
+            }
+        },
+    }
+
+
+_SELF_SERVICE_TICKET_ACCEPTED_EXAMPLE = {
+    "id": _TICKET_ID_EXAMPLE,
+    "code": "TK-0042",
+    "title": "VPN error 809 al conectar desde casa",
+    "description": "Al intentar conectar la VPN aparece error 809.",
+    "affected_module": "VPN",
+    "impact_level": "MEDIUM",
+    "status": "RESOLVED",
+    "priority": "MEDIUM",
+    "category": "Red/VPN",
+    "current_tier": "SELF_SERVICE",
+    "reporter_id": "1a2b3c4d-0000-4000-8000-000000000001",
+    "assigned_analyst_id": None,
+    "created_at": "2026-11-20T13:15:00Z",
+    "updated_at": "2026-11-20T13:18:10Z",
+    "resolved_at": "2026-11-20T13:18:10Z",
+    "closed_at": None,
+    "evidences": [],
+}
+
+_SELF_SERVICE_TICKET_REJECTED_EXAMPLE = {
+    **_SELF_SERVICE_TICKET_ACCEPTED_EXAMPLE,
+    "status": "PENDING_ASSIGNMENT",
+    "current_tier": "TIER_L1",
+    "resolved_at": None,
+}
+
+
+@router.post(
+    "/tickets/{ticket_id}/self-service/accept",
+    response_model=TicketResponse,
+    summary="Aceptar la recomendación de autoservicio",
+    responses={
+        200: {"content": {"application/json": {"example": _SELF_SERVICE_TICKET_ACCEPTED_EXAMPLE}}},
+        401: {"description": "Token ausente o inválido"},
+        403: _self_service_problem(
+            403,
+            "ticket-status-change-forbidden",
+            "Acceso denegado",
+            "Solo el colaborador que reportó el incidente puede responder a la recomendación de autoservicio.",
+            "accept",
+            description="Quien llama no es el colaborador que reportó el ticket",
+        ),
+        404: _self_service_problem(
+            404,
+            "ticket-not-found",
+            "Recurso no encontrado",
+            "El ticket no existe.",
+            "accept",
+            description="El ticket no existe o pertenece a otro workspace",
+        ),
+        422: _self_service_problem(
+            422,
+            "invalid-ticket-state-transition",
+            "Regla de negocio incumplida",
+            "El ticket debe estar en SELF_SERVICE_PROPOSED para aceptar el autoservicio (estado actual: PENDING_ASSIGNMENT).",
+            "accept",
+            description="El ticket no está en estado SELF_SERVICE_PROPOSED",
+        ),
+    },
+)
+def accept_self_service(
+    ticket_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: TicketCommandService = Depends(get_ticket_command_service),
+) -> TicketResponse:
+    """Confirma que la recomendación de autoservicio resolvió el incidente (US12, T76).
+
+    Solo el colaborador que reportó el ticket puede ejecutarlo cuando el ticket está en `SELF_SERVICE_PROPOSED`.
+    Transiciona el ticket a `RESOLVED` manteniendo `current_tier = SELF_SERVICE` y registra el evento
+    `SelfServiceAccepted` en la bitácora de auditoría.
+    """
+    ticket = service.accept_self_service(AcceptSelfServiceCommand(ticket_id=ticket_id, actor=_actor(current_user)))
+    return TicketResponse.from_domain(ticket)
+
+
+@router.post(
+    "/tickets/{ticket_id}/self-service/reject",
+    response_model=TicketResponse,
+    summary="Rechazar la recomendación de autoservicio y solicitar un analista",
+    responses={
+        200: {"content": {"application/json": {"example": _SELF_SERVICE_TICKET_REJECTED_EXAMPLE}}},
+        401: {"description": "Token ausente o inválido"},
+        403: _self_service_problem(
+            403,
+            "ticket-status-change-forbidden",
+            "Acceso denegado",
+            "Solo el colaborador que reportó el incidente puede responder a la recomendación de autoservicio.",
+            "reject",
+            description="Quien llama no es el colaborador que reportó el ticket",
+        ),
+        404: _self_service_problem(
+            404,
+            "ticket-not-found",
+            "Recurso no encontrado",
+            "El ticket no existe.",
+            "reject",
+            description="El ticket no existe o pertenece a otro workspace",
+        ),
+        422: _self_service_problem(
+            422,
+            "invalid-ticket-state-transition",
+            "Regla de negocio incumplida",
+            "El ticket debe estar en SELF_SERVICE_PROPOSED para rechazar el autoservicio (estado actual: RESOLVED).",
+            "reject",
+            description="El ticket no está en SELF_SERVICE_PROPOSED o el motivo supera 500 caracteres",
+        ),
+    },
+)
+def reject_self_service(
+    ticket_id: uuid.UUID,
+    body: RejectSelfServiceRequest | None = None,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: TicketCommandService = Depends(get_ticket_command_service),
+) -> TicketResponse:
+    """Rechaza la recomendación de autoservicio y deriva el ticket a soporte Nivel 1 (US12, T76).
+
+    Solo el colaborador que reportó el ticket puede ejecutarlo cuando está en `SELF_SERVICE_PROPOSED`.
+    Transiciona el ticket a `PENDING_ASSIGNMENT` (`current_tier = TIER_L1`), reabre el diagnóstico a
+    `PENDING_REVIEW` para que un analista L1 pueda revisarlo en HITL (D10) y registra `SelfServiceRejected`.
+    """
+    ticket = service.reject_self_service(
+        RejectSelfServiceCommand(
+            ticket_id=ticket_id,
+            actor=_actor(current_user),
+            reason=body.reason if body else None,
+        )
+    )
+    return TicketResponse.from_domain(ticket)

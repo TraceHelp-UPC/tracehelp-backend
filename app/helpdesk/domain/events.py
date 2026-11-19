@@ -57,3 +57,22 @@ class MessagePosted(DomainEvent):
     is_internal_note: bool
     ticket_status: str
     content_length: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class SelfServiceAccepted(DomainEvent):
+    """El colaborador confirmó que la recomendación de autoservicio resolvió el incidente (US12, T76)."""
+
+    ticket_id: uuid.UUID
+    workspace_id: uuid.UUID
+    reporter_id: uuid.UUID
+
+
+@dataclass(frozen=True, kw_only=True)
+class SelfServiceRejected(DomainEvent):
+    """El colaborador rechazó la recomendación de autoservicio y derivó el incidente a soporte L1 (US12, T76)."""
+
+    ticket_id: uuid.UUID
+    workspace_id: uuid.UUID
+    reporter_id: uuid.UUID
+    reason: str | None = None

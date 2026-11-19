@@ -33,3 +33,27 @@ class IAnalystAvailabilityReader(ABC):
     @abstractmethod
     def get_candidate(self, analyst_id: uuid.UUID) -> AnalystAssignmentCandidate | None:
         """Devuelve los datos del candidato de asignación o None si no existe."""
+
+
+@dataclass(frozen=True)
+class SelfServiceSource:
+    reference: str
+    document_title: str
+    citation: str
+
+
+@dataclass(frozen=True)
+class SelfServiceRecommendation:
+    summary: str
+    steps: tuple[str, ...]
+    match_percentage: int | None
+    confidence_label: str
+    sources: tuple[SelfServiceSource, ...]
+
+
+class ISelfServiceRecommendationReader(ABC):
+    """Puerto ACL de solo lectura hacia Smart Triage para exponer la propuesta de autoservicio (US12, T76)."""
+
+    @abstractmethod
+    def for_ticket(self, ticket_id: uuid.UUID) -> SelfServiceRecommendation | None:
+        """Lee la recomendación de autoservicio desde triage_diagnoses solo si está en SELF_SERVICE_PROPOSED."""
