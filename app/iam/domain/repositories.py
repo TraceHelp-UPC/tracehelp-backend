@@ -1,4 +1,4 @@
-"""Contrato de persistencia del agregado User."""
+"""Contratos de persistencia del contexto IAM."""
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from app.iam.domain.enums import RoleName
 from app.iam.domain.user import User
 from app.iam.domain.value_objects import EmailAddress
+from app.iam.domain.workspace_settings import WorkspaceSettings
 from app.shared.domain.pagination import Page, PageRequest
 from app.shared.domain.specialist_group import SpecialistGroup
 
@@ -41,3 +42,13 @@ class IUserRepository(ABC):
     @abstractmethod
     def search(self, criteria: UserSearchCriteria, page: PageRequest) -> Page[User]:
         """Usuarios del workspace ordenados por nombre y luego id."""
+
+
+class IWorkspaceSettingsRepository(ABC):
+    @abstractmethod
+    def get(self, workspace_id: uuid.UUID) -> WorkspaceSettings | None:
+        """Devuelve la configuración guardada del workspace, o None si no tiene fila."""
+
+    @abstractmethod
+    def save(self, settings: WorkspaceSettings) -> WorkspaceSettings:
+        """Inserta o actualiza (upsert) la configuración del workspace sin hacer commit."""

@@ -84,7 +84,13 @@ class DiagnosisOutcome:
         return self.status is DiagnosisStatus.ANSWERED
 
 
-def validate_draft(draft: DiagnosisDraft, fragments: tuple[EvidenceFragment, ...], *, model: str) -> DiagnosisOutcome:
+def validate_draft(
+    draft: DiagnosisDraft,
+    fragments: tuple[EvidenceFragment, ...],
+    *,
+    model: str,
+    require_citations: bool = True,
+) -> DiagnosisOutcome:
     """Convierte la respuesta de la IA en un diagnóstico, o explica por qué se descarta."""
     if not draft.answerable:
         return DiagnosisOutcome(
@@ -105,7 +111,7 @@ def validate_draft(draft: DiagnosisDraft, fragments: tuple[EvidenceFragment, ...
     valid = range(1, len(fragments) + 1)
     inline = {int(n) for text in (summary, *steps) for n in _MARKER.findall(text)}
     cited = set(draft.cited_fragments) | inline
-    if not cited:
+    if require_citations and not cited:
         return _invalid("La respuesta no cita ningún fragmento del manual.")
     unknown = sorted(n for n in cited if n not in valid)
     if unknown:

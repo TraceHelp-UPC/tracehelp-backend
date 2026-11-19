@@ -18,7 +18,7 @@ MAX_INCIDENT_CHARACTERS = 4000
 
 class DiagnosisGenerationService:
     def __init__(
-        self, *, generator: IDiagnosisGenerator, masker: IPiiMasker, max_fragments: int = DEFAULT_MAX_FRAGMENTS
+        self, *, generator: IDiagnosisGenerator, masker: IPiiMasker, max_fragments: int | None = None
     ) -> None:
         self._generator = generator
         self._masker = masker
@@ -31,7 +31,11 @@ class DiagnosisGenerationService:
                 reason="Ningún fragmento de los manuales superó el umbral de evidencia.",
             )
 
-        fragments = evaluation.supporting[: self._max_fragments]
+        fragments = (
+            evaluation.supporting[: self._max_fragments]
+            if self._max_fragments is not None
+            else evaluation.supporting
+        )
         prompt = build_prompt(
             self._masker.mask((incident_text or "").strip()[:MAX_INCIDENT_CHARACTERS]),
             [(f.citation.label, self._masker.mask(f.content)) for f in fragments],
@@ -40,4 +44,6 @@ class DiagnosisGenerationService:
             draft = self._generator.generate(prompt)
         except InvalidLlmResponseError as exc:
             return DiagnosisOutcome(DiagnosisStatus.INVALID_RESPONSE, reason=str(exc))
-        return validate_draft(draft, fragments, model=self._generator.model_name)
+        return validate_draft(
+            draft, fragments, model=self._generator.model_name, require_citations=evaluation.strict_grounding
+        )

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from app.shared.domain.pii import IPiiMasker
 from app.shared.infrastructure.event_bus import InMemoryEventBus
-from app.smart_triage.application.ports import IKnowledgeRetriever
+from app.smart_triage.application.ports import IKnowledgeRetriever, IRagParametersProvider, RagParameters
 from app.smart_triage.domain.events import LowConfidenceAlertRaised
 from app.smart_triage.domain.exceptions import EmptyTriageQueryError
 from app.smart_triage.domain.grounding import (
@@ -26,6 +26,16 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TOP_K = 5
 MAX_QUERY_CHARACTERS = 4000  # el modelo de embeddings acepta ~2048 tokens; el inicio del texto es lo más relevante
+
+
+class StaticRagParametersProvider(IRagParametersProvider):
+    """Proveedor estático usado por pruebas o llamadores que pasan umbrales fijos."""
+
+    def __init__(self, parameters: RagParameters) -> None:
+        self._parameters = parameters
+
+    def for_workspace(self, workspace_id: uuid.UUID) -> RagParameters:
+        return self._parameters
 
 
 @dataclass(frozen=True)
@@ -43,19 +53,33 @@ class EvidenceRetrievalService:
         retriever: IKnowledgeRetriever,
         masker: IPiiMasker,
         events: InMemoryEventBus,
-        thresholds: GroundingThresholds,
+        parameters: IRagParametersProvider | None = None,
+        thresholds: GroundingThresholds | None = None,
         top_k: int = DEFAULT_TOP_K,
+        strict_grounding: bool = True,
         evaluator: GroundingEvaluationDomainService | None = None,
     ) -> None:
         self._retriever = retriever
         self._masker = masker
         self._events = events
         self._thresholds = thresholds
-        self._top_k = top_k
+        if parameters is not None:
+            self._parameters = parameters
+        else:
+            effective_thresholds = thresholds or GroundingThresholds()
+            self._thresholds = effective_thresholds
+            self._parameters = StaticRagParametersProvider(
+                RagParameters(
+                    similarity_threshold=effective_thresholds.similarity,
+                    self_service_threshold=effective_thresholds.self_service,
+                    retrieval_top_k=top_k,
+                    strict_grounding=strict_grounding,
+                )
+            )
         self._evaluator = evaluator or GroundingEvaluationDomainService()
 
     @property
-    def thresholds(self) -> GroundingThresholds:
+    def thresholds(self) -> GroundingThresholds | None:
         return self._thresholds
 
     def retrieve_and_evaluate(self, command: RetrieveEvidenceCommand) -> GroundingEvaluation:
@@ -64,8 +88,17 @@ class EvidenceRetrievalService:
             raise EmptyTriageQueryError("No hay texto para buscar en los manuales.")
         query = self._masker.mask(text[:MAX_QUERY_CHARACTERS])
 
-        fragments = self._retriever.retrieve(command.workspace_id, query, top_k=command.top_k or self._top_k)
-        evaluation = self._evaluator.evaluate(fragments, self._thresholds)
+        params = self._parameters.for_workspace(command.workspace_id)
+        thresholds = GroundingThresholds(
+            similarity=params.similarity_threshold,
+            self_service=params.self_service_threshold,
+        )
+        top_k = command.top_k if command.top_k is not None else params.retrieval_top_k
+
+        fragments = self._retriever.retrieve(command.workspace_id, query, top_k=top_k)
+        evaluation = self._evaluator.evaluate(
+            fragments, thresholds, strict_grounding=params.strict_grounding
+        )
 
         if evaluation.requires_low_confidence_alert:
             logger.warning(
@@ -73,7 +106,7 @@ class EvidenceRetrievalService:
                 command.workspace_id,
                 command.ticket_id,
                 evaluation.best_score,
-                self._thresholds.similarity,
+                thresholds.similarity,
                 len(evaluation.retrieved),
             )
             self._events.publish(
@@ -81,7 +114,7 @@ class EvidenceRetrievalService:
                     workspace_id=command.workspace_id,
                     ticket_id=command.ticket_id,
                     best_score=evaluation.best_score,
-                    similarity_threshold=self._thresholds.similarity,
+                    similarity_threshold=thresholds.similarity,
                     fragments_retrieved=len(evaluation.retrieved),
                 )
             )
