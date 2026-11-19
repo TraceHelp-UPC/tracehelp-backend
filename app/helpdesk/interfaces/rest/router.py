@@ -362,9 +362,9 @@ MESSAGES_DEFAULT_PAGE_SIZE = 50
 _TICKET_ID_EXAMPLE = "6f1c2a3b-8d4e-4f10-9a7b-2c3d4e5f6a7b"
 
 
-def _problem(status_code: int, slug: str, title: str, detail: str) -> dict:
+def _problem(status_code: int, slug: str, title: str, detail: str, description: str | None = None) -> dict:
     return {
-        "description": title,
+        "description": description or title,
         "content": {
             "application/problem+json": {
                 "example": {
@@ -402,7 +402,13 @@ _MESSAGE_EXAMPLE = {
         401: {"description": "Token ausente o inválido"},
         403: _problem(403, "internal-note-not-allowed", "Acceso denegado", "Solo el equipo de soporte puede registrar notas internas."),
         404: _problem(404, "ticket-not-found", "Recurso no encontrado", "El ticket no existe."),
-        409: _problem(409, "ticket-closed", "Conflicto con el estado actual", "El ticket TK-0042 está cerrado y ya no admite mensajes."),
+        409: _problem(
+            409,
+            "ticket-closed",
+            "Conflicto con el estado actual",
+            "El ticket TK-0042 está resuelto y no admite mensajes; reábrelo si necesitas continuar la conversación.",
+            description="El ticket está RESOLVED o CLOSED y no admite nuevos mensajes (D30)",
+        ),
         422: {
             "description": "Mensaje vacío, de solo espacios o de más de 2000 caracteres",
             "content": {
@@ -429,8 +435,10 @@ def post_ticket_message(
     """Escribe un mensaje en la conversación del ticket (US26). Lo usan W-05 (colaborador) y W-07 (soporte).
 
     Pueden escribir quien reportó el ticket y el equipo de soporte (tickets:manage) del mismo workspace, en
-    cualquier estado salvo CLOSED. Solo el soporte puede marcar `is_internal_note`: la nota interna nunca
-    la ve el colaborador. El texto se guarda tal cual; el evento MessagePosted no lo incluye.
+    cualquier estado salvo RESOLVED y CLOSED (D30). En RESOLVED el colaborador debe reabrir el ticket para
+    volver a escribir; tanto RESOLVED como CLOSED devuelven 409 `urn:tracehelp:problems:ticket-closed`. Solo el
+    soporte puede marcar `is_internal_note`: la nota interna nunca la ve el colaborador. El texto se guarda tal
+    cual; el evento MessagePosted no lo incluye.
     """
     posted = service.post_message(
         PostMessageCommand(

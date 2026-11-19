@@ -54,18 +54,28 @@ def test_event_never_carries_the_text():
     assert event.is_internal_note is True and event.author_is_reporter is False
 
 
-def test_post_message_in_closed_ticket_is_rejected_without_side_effects():
-    ticket = _ticket(TicketStatus.CLOSED)
-    with pytest.raises(TicketClosedError):
+@pytest.mark.parametrize(
+    ("status", "expected_fragment"),
+    [
+        (TicketStatus.CLOSED, "está cerrado"),
+        (TicketStatus.RESOLVED, "está resuelto"),
+    ],
+)
+def test_post_message_in_resolved_or_closed_ticket_is_rejected_without_side_effects(status, expected_fragment):
+    ticket = _ticket(status)
+    with pytest.raises(TicketClosedError) as exc_info:
         ticket.post_message(author_id=uuid.uuid4(), content="Hola")
+    assert expected_fragment in exc_info.value.detail
     assert ticket.comments == [] and ticket.pull_events() == []
 
 
-@pytest.mark.parametrize("status", [s for s in TicketStatus if s is not TicketStatus.CLOSED])
-def test_post_message_is_allowed_in_every_status_but_closed(status):
+@pytest.mark.parametrize(
+    "status", [s for s in TicketStatus if s not in (TicketStatus.RESOLVED, TicketStatus.CLOSED)]
+)
+def test_post_message_is_allowed_in_every_active_status(status):
     ticket = _ticket(status)
     ticket.post_message(author_id=uuid.uuid4(), content="Hola")
-    assert ticket.status is status  # escribir en RESOLVED no reabre el ticket
+    assert ticket.status is status
 
 
 @pytest.mark.parametrize("content", ["", "   ", "\n\t "])

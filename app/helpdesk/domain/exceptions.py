@@ -35,4 +35,4 @@ class InternalNoteNotAllowedError(DomainError):
 
 
 class TicketClosedError(DomainError):
-    """El ticket está CLOSED y ya no admite mensajes (HTTP 409)."""
+    """El ticket está RESOLVED o CLOSED y no admite nuevos mensajes (HTTP 409, D30)."""
