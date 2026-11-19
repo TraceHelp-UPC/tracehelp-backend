@@ -1,9 +1,24 @@
 """Contrato de persistencia del agregado User."""
 import uuid
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
+from app.iam.domain.enums import RoleName
 from app.iam.domain.user import User
 from app.iam.domain.value_objects import EmailAddress
+from app.shared.domain.pagination import Page, PageRequest
+from app.shared.domain.specialist_group import SpecialistGroup
+
+
+@dataclass(frozen=True)
+class UserSearchCriteria:
+    """Filtros del listado de usuarios (US09). `is_active=False` incluye INACTIVE y LOCKED."""
+
+    workspace_id: uuid.UUID
+    role: RoleName | None = None
+    specialist_group: SpecialistGroup | None = None
+    is_active: bool | None = None
+    search: str | None = None
 
 
 class IUserRepository(ABC):
@@ -22,3 +37,7 @@ class IUserRepository(ABC):
 
     @abstractmethod
     def find_support_staff_by_workspace(self, workspace_id: uuid.UUID) -> list[User]: ...
+
+    @abstractmethod
+    def search(self, criteria: UserSearchCriteria, page: PageRequest) -> Page[User]:
+        """Usuarios del workspace ordenados por nombre y luego id."""

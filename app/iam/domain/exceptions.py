@@ -1,5 +1,5 @@
 """Excepciones del contexto IAM."""
-from app.shared.domain.exceptions import DomainError, DomainValidationError
+from app.shared.domain.exceptions import DomainError, DomainValidationError, ResourceNotFoundError
 
 
 class InvalidEmailError(DomainValidationError):
@@ -28,3 +28,19 @@ class InvalidCredentialsError(DomainError):
 
 class InvalidTokenError(DomainError):
     """Token ausente, mal formado, expirado o de tipo incorrecto (se traduce a HTTP 401)."""
+
+
+class UserNotFoundError(ResourceNotFoundError):
+    """El usuario no existe en el workspace (se traduce a HTTP 404)."""
+
+
+class EmailAlreadyRegisteredError(DomainError):
+    """Ya existe una cuenta con ese correo (se traduce a HTTP 409)."""
+
+
+class SpecialistGroupNotAllowedError(DomainError):
+    """Solo los especialistas L2 pueden tener un grupo (se traduce a HTTP 422)."""
+
+
+class SelfLockoutError(DomainError):
+    """El líder intenta quitarse su propio rol o desactivar su propia cuenta (se traduce a HTTP 422)."""

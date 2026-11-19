@@ -3,17 +3,44 @@ import uuid
 from datetime import UTC, datetime
 
 from app.iam.domain.enums import AvailabilityStatus, RoleName, UserStatus
-from app.iam.domain.events import UserAuthenticated, UserRegistered
-from app.iam.domain.exceptions import InactiveUserError, InvalidRoleOperationError, InvalidUserDataError
+from app.iam.domain.events import (
+    UserAuthenticated,
+    UserDeactivated,
+    UserProfileUpdated,
+    UserReactivated,
+    UserRegistered,
+    UserRoleChanged,
+)
+from app.iam.domain.exceptions import (
+    InactiveUserError,
+    InvalidRoleOperationError,
+    InvalidUserDataError,
+    SpecialistGroupNotAllowedError,
+)
 from app.iam.domain.permissions import Permission, RolePermission
 from app.iam.domain.value_objects import EmailAddress, PasswordHash
 from app.shared.domain.aggregate_root import AggregateRoot
+from app.shared.domain.specialist_group import SpecialistGroup
 
 SUPPORT_ROLES = frozenset({RoleName.ANALYST_L1, RoleName.SPECIALIST_L2})
+MAX_DEPARTMENT_LENGTH = 100
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _clean_department(department: str | None) -> str:
+    department = (department or "").strip()
+    if not department:
+        raise InvalidUserDataError("El área o departamento es obligatorio.")
+    if len(department) > MAX_DEPARTMENT_LENGTH:
+        raise InvalidUserDataError(f"El área o departamento no puede superar los {MAX_DEPARTMENT_LENGTH} caracteres.")
+    return department
+
+
+def _group_value(group: SpecialistGroup | None) -> str | None:
+    return group.value if group is not None else None
 
 
 class User(AggregateRoot):
@@ -35,6 +62,7 @@ class User(AggregateRoot):
         notify_inapp: bool = True,
         created_at: datetime | None = None,
         last_login_at: datetime | None = None,
+        specialist_group: SpecialistGroup | None = None,
     ) -> None:
         super().__init__()
         self.id = id
@@ -50,6 +78,7 @@ class User(AggregateRoot):
         self.notify_inapp = notify_inapp
         self.created_at = created_at or _now()
         self.last_login_at = last_login_at
+        self.specialist_group = specialist_group
 
     # ------------------------------------------------------------------ fábrica
     @classmethod
@@ -62,16 +91,18 @@ class User(AggregateRoot):
         password_hash: PasswordHash,
         role: RoleName,
         department: str,
+        specialist_group: SpecialistGroup | None = None,
+        registered_by: uuid.UUID | None = None,
     ) -> "User":
-        """Crea un usuario activo y emite UserRegistered (US09)."""
+        """Crea un usuario activo y emite UserRegistered (US09). `registered_by` = líder que hizo el alta."""
         full_name = (full_name or "").strip()
-        department = (department or "").strip()
         if not full_name:
             raise InvalidUserDataError("El nombre completo es obligatorio.")
         if len(full_name) > 150:
             raise InvalidUserDataError("El nombre completo no puede superar los 150 caracteres.")
-        if not department:
-            raise InvalidUserDataError("El área o departamento es obligatorio.")
+        department = _clean_department(department)
+        if specialist_group is not None and role is not RoleName.SPECIALIST_L2:
+            raise SpecialistGroupNotAllowedError("Solo los especialistas L2 pueden tener un grupo asignado.")
 
         user = cls(
             id=uuid.uuid4(),
@@ -81,8 +112,17 @@ class User(AggregateRoot):
             password_hash=password_hash,
             role=role,
             department=department,
+            specialist_group=specialist_group,
         )
-        user.record_event(UserRegistered(user_id=user.id, workspace_id=workspace_id, role=role))
+        user.record_event(
+            UserRegistered(
+                user_id=user.id,
+                workspace_id=workspace_id,
+                role=role,
+                specialist_group=_group_value(specialist_group),
+                registered_by=registered_by,
+            )
+        )
         return user
 
     # ------------------------------------------------------------------ consultas
@@ -109,10 +149,52 @@ class User(AggregateRoot):
         self.last_login_at = _now()
         self.record_event(UserAuthenticated(user_id=self.id, workspace_id=self.workspace_id))
 
-    def change_role(self, new_role: RoleName) -> None:
+    def change_role(self, new_role: RoleName, changed_by: uuid.UUID | None = None) -> None:
+        """Cambia el rol. Si el nuevo rol no es SPECIALIST_L2, el grupo se borra en la misma operación."""
+        if new_role is self.role:
+            return
+        previous_role = self.role
+        previous_group = self.specialist_group
         self.role = new_role
         if not self.is_support_staff:
             self.availability_status = AvailabilityStatus.AVAILABLE
+        self.record_event(
+            UserRoleChanged(
+                user_id=self.id,
+                workspace_id=self.workspace_id,
+                changed_by=changed_by,
+                previous_role=previous_role,
+                new_role=new_role,
+            )
+        )
+        if new_role is not RoleName.SPECIALIST_L2 and previous_group is not None:
+            self.specialist_group = None
+            self._record_profile_change(changed_by, {"specialist_group": {"from": previous_group.value, "to": None}})
+
+    def change_department(self, department: str, changed_by: uuid.UUID | None = None) -> None:
+        department = _clean_department(department)
+        if department == self.department:
+            return
+        previous = self.department
+        self.department = department
+        self._record_profile_change(changed_by, {"department": {"from": previous, "to": department}})
+
+    def assign_specialist_group(self, group: SpecialistGroup | None, changed_by: uuid.UUID | None = None) -> None:
+        """Asigna o quita (None) el grupo del especialista. Solo el rol SPECIALIST_L2 puede tener grupo."""
+        if group is not None and self.role is not RoleName.SPECIALIST_L2:
+            raise SpecialistGroupNotAllowedError("Solo los especialistas L2 pueden tener un grupo asignado.")
+        if group is self.specialist_group:
+            return
+        previous = self.specialist_group
+        self.specialist_group = group
+        self._record_profile_change(
+            changed_by, {"specialist_group": {"from": _group_value(previous), "to": _group_value(group)}}
+        )
+
+    def _record_profile_change(self, changed_by: uuid.UUID | None, changes: dict[str, dict[str, str | None]]) -> None:
+        self.record_event(
+            UserProfileUpdated(user_id=self.id, workspace_id=self.workspace_id, changed_by=changed_by, changes=changes)
+        )
 
     def set_availability(self, availability: AvailabilityStatus) -> None:
         """Disponibilidad para la asignación automática de tickets (US24). Solo aplica a analistas y especialistas."""
@@ -120,8 +202,17 @@ class User(AggregateRoot):
             raise InvalidRoleOperationError("Solo los analistas L1 y especialistas L2 gestionan su disponibilidad.")
         self.availability_status = availability
 
-    def deactivate(self) -> None:
+    def deactivate(self, changed_by: uuid.UUID | None = None) -> None:
+        """Deja la cuenta INACTIVE y no disponible, para que la asignación automática no le reparta tickets."""
+        if self.status is UserStatus.INACTIVE:
+            return
         self.status = UserStatus.INACTIVE
+        self.availability_status = AvailabilityStatus.UNAVAILABLE
+        self.record_event(UserDeactivated(user_id=self.id, workspace_id=self.workspace_id, changed_by=changed_by))
 
-    def activate(self) -> None:
+    def activate(self, changed_by: uuid.UUID | None = None) -> None:
+        """Reactiva la cuenta. La disponibilidad sigue en UNAVAILABLE: la vuelve a activar el propio analista."""
+        if self.status is UserStatus.ACTIVE:
+            return
         self.status = UserStatus.ACTIVE
+        self.record_event(UserReactivated(user_id=self.id, workspace_id=self.workspace_id, changed_by=changed_by))

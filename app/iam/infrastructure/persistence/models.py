@@ -6,12 +6,13 @@ La lógica de dominio de IAM se implementa en la T05.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, String, func, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Index, String, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 from app.iam.domain.enums import AvailabilityStatus, RoleName, UserStatus
+from app.shared.domain.specialist_group import SpecialistGroup
 
 
 def _enum(enum_cls, name: str) -> Enum:
@@ -30,7 +31,12 @@ class WorkspaceModel(Base):
 
 class UserModel(Base):
     __tablename__ = "iam_users"
-    __table_args__ = (Index("ix_iam_users_workspace_id_role", "workspace_id", "role"),)
+    __table_args__ = (
+        Index("ix_iam_users_workspace_id_role", "workspace_id", "role"),
+        CheckConstraint(
+            "specialist_group IS NULL OR role = 'SPECIALIST_L2'", name="specialist_group_role"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
     workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("iam_workspaces.id"), nullable=False)
@@ -42,6 +48,9 @@ class UserModel(Base):
     status: Mapped[UserStatus] = mapped_column(_enum(UserStatus, "user_status"), nullable=False, default=UserStatus.ACTIVE)
     availability_status: Mapped[AvailabilityStatus] = mapped_column(
         _enum(AvailabilityStatus, "availability_status"), nullable=False, default=AvailabilityStatus.AVAILABLE
+    )
+    specialist_group: Mapped[SpecialistGroup | None] = mapped_column(
+        _enum(SpecialistGroup, "specialist_group"), nullable=True
     )
     notify_email: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     notify_inapp: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
