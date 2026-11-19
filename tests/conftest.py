@@ -98,18 +98,52 @@ def api_client(db_session):
     from fastapi.testclient import TestClient
 
     from app.core.database import get_db
-    from app.core.event_handlers import analytics_audit_handler
+    from app.core.event_handlers import (
+        analytics_audit_handler,
+        notification_event_handler,
+        self_service_rejection_handler,
+    )
     from app.main import app
 
     def _override_get_db():
         yield db_session
 
     original_factory = analytics_audit_handler._session_factory
+    original_notif_factory = notification_event_handler._session_factory
+    original_ss_factory = self_service_rejection_handler._session_factory
     analytics_audit_handler._session_factory = lambda: contextlib.nullcontext(db_session)
+    notification_event_handler._session_factory = lambda: contextlib.nullcontext(db_session)
+    self_service_rejection_handler._session_factory = lambda: contextlib.nullcontext(db_session)
     app.dependency_overrides[get_db] = _override_get_db
     yield TestClient(app)
     app.dependency_overrides.clear()
     analytics_audit_handler._session_factory = original_factory
+    notification_event_handler._session_factory = original_notif_factory
+    self_service_rejection_handler._session_factory = original_ss_factory
+
+
+class FakeEmailSender:
+    """Doble de pruebas que acumula correos enviados sin tocar red ni SMTP (US19, T91)."""
+
+    def __init__(self) -> None:
+        self.sent: list = []
+
+    def send(self, message) -> None:
+        self.sent.append(message)
+
+    def clear(self) -> None:
+        self.sent.clear()
+
+
+@pytest.fixture()
+def fake_email_sender():
+    """Inyecta un FakeEmailSender en get_email_sender() durante la prueba y lo limpia al terminar."""
+    from app.helpdesk.infrastructure.email import reset_email_sender, set_email_sender
+
+    sender = FakeEmailSender()
+    set_email_sender(sender)
+    yield sender
+    reset_email_sender()
 
 
 @pytest.fixture()

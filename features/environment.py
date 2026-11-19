@@ -57,7 +57,11 @@ def before_scenario(context, scenario):
     import contextlib
 
     from app.core.database import get_db
-    from app.core.event_handlers import analytics_audit_handler
+    from app.core.event_handlers import (
+        analytics_audit_handler,
+        notification_event_handler,
+        self_service_rejection_handler,
+    )
 
     context.connection = context.engine.connect()
     context.transaction = context.connection.begin()
@@ -67,15 +71,29 @@ def before_scenario(context, scenario):
         yield context.session
 
     context._original_audit_factory = analytics_audit_handler._session_factory
+    context._original_notif_factory = notification_event_handler._session_factory
+    context._original_ss_factory = self_service_rejection_handler._session_factory
     analytics_audit_handler._session_factory = lambda: contextlib.nullcontext(context.session)
+    notification_event_handler._session_factory = lambda: contextlib.nullcontext(context.session)
+    self_service_rejection_handler._session_factory = lambda: contextlib.nullcontext(context.session)
     context.app.dependency_overrides[get_db] = _override_get_db
     context.response = None
 
 
 def after_scenario(context, scenario):
-    from app.core.event_handlers import analytics_audit_handler
+    from app.core.event_handlers import (
+        analytics_audit_handler,
+        notification_event_handler,
+        self_service_rejection_handler,
+    )
 
     analytics_audit_handler._session_factory = getattr(context, "_original_audit_factory", analytics_audit_handler._session_factory)
+    notification_event_handler._session_factory = getattr(
+        context, "_original_notif_factory", notification_event_handler._session_factory
+    )
+    self_service_rejection_handler._session_factory = getattr(
+        context, "_original_ss_factory", self_service_rejection_handler._session_factory
+    )
     context.app.dependency_overrides.clear()
     context.session.close()
     context.transaction.rollback()

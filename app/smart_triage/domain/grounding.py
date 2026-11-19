@@ -86,6 +86,7 @@ class GroundingEvaluation:
     thresholds: GroundingThresholds
     retrieved: tuple[EvidenceFragment, ...]
     supporting: tuple[EvidenceFragment, ...]
+    strict_grounding: bool = True
 
     @property
     def is_grounded(self) -> bool:
@@ -103,7 +104,13 @@ class GroundingEvaluation:
 class GroundingEvaluationDomainService:
     """Clasifica la evidencia recuperada según los umbrales configurados."""
 
-    def evaluate(self, fragments: Iterable[EvidenceFragment], thresholds: GroundingThresholds) -> GroundingEvaluation:
+    def evaluate(
+        self,
+        fragments: Iterable[EvidenceFragment],
+        thresholds: GroundingThresholds,
+        *,
+        strict_grounding: bool = True,
+    ) -> GroundingEvaluation:
         retrieved = tuple(sorted(fragments, key=lambda f: f.similarity, reverse=True))
         supporting = tuple(f for f in retrieved if f.similarity >= thresholds.similarity)
         best = retrieved[0].similarity if retrieved else 0.0
@@ -115,5 +122,10 @@ class GroundingEvaluationDomainService:
         else:
             level = ConfidenceLevel.GROUNDED
         return GroundingEvaluation(
-            level=level, best_score=round(best, 4), thresholds=thresholds, retrieved=retrieved, supporting=supporting
+            level=level,
+            best_score=round(best, 4),
+            thresholds=thresholds,
+            retrieved=retrieved,
+            supporting=supporting,
+            strict_grounding=strict_grounding,
         )

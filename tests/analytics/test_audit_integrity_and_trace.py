@@ -735,8 +735,8 @@ def test_migration_0014_backfills_existing_rows_deterministically_and_supports_d
     t_late = datetime(2026, 11, 10, 9, 0, tzinfo=UTC)
 
     try:
-        # 1. Bajar a 0010 (antes de seq y previous_hash)
-        command.downgrade(cfg, "0010")
+        # 1. Bajar a 0013 (antes de seq y previous_hash)
+        command.downgrade(cfg, "0013")
         cols_before = {c["name"] for c in inspect(db_engine).get_columns("analytics_audit_log")}
         assert "seq" not in cols_before and "previous_hash" not in cols_before
 
@@ -812,7 +812,7 @@ def test_migration_0014_backfills_existing_rows_deterministically_and_supports_d
             assert AuditIntegrityReport.evaluate(a_new, a_late).valid is True
 
         # 4. Probar downgrade limpio y vuelta a head
-        command.downgrade(cfg, "0010")
+        command.downgrade(cfg, "0013")
         cols_after_down = {c["name"] for c in inspect(db_engine).get_columns("analytics_audit_log")}
         assert "seq" not in cols_after_down and "previous_hash" not in cols_after_down
         indexes_after_down = {ix["name"] for ix in inspect(db_engine).get_indexes("analytics_audit_log")}

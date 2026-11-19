@@ -6,7 +6,12 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from app.helpdesk.application import status_change_policy
-from app.helpdesk.application.ports import IAnalystAvailabilityReader, IImageProcessor
+from app.helpdesk.application.ports import (
+    IAnalystAvailabilityReader,
+    IImageProcessor,
+    ITriageContextReader,
+    TriageContextSnapshot,
+)
 from app.helpdesk.application.ticket_queries import IUserDirectory
 from app.helpdesk.application.status_change_policy import Actor
 from app.helpdesk.domain import state_machine
@@ -24,9 +29,13 @@ from app.helpdesk.domain.repositories import ITicketRepository
 from app.helpdesk.domain.ticket import Ticket, TicketComment
 from app.helpdesk.domain.value_objects import MAX_EVIDENCE_BYTES, VisualEvidence
 from app.iam.domain.permissions import Permission
+from app.shared.domain.specialist_group import SpecialistGroup
 from app.shared.infrastructure.event_bus import InMemoryEventBus
 
 logger = logging.getLogger(__name__)
+
+MAX_SNAPSHOT_OCR_LENGTH = 1000
+_NO_TRIAGE_SUMMARY = "Sin diagnóstico automático registrado al momento del escalamiento."
 
 
 @dataclass(frozen=True)
@@ -80,6 +89,19 @@ class PostMessageCommand:
 
 
 @dataclass(frozen=True)
+class AcceptSelfServiceCommand:
+    ticket_id: uuid.UUID
+    actor: Actor
+
+
+@dataclass(frozen=True)
+class RejectSelfServiceCommand:
+    ticket_id: uuid.UUID
+    actor: Actor
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
 class PostedMessage:
     """Resultado de publicar un mensaje: el comentario creado y lo que la API necesita para responder."""
 
@@ -87,6 +109,84 @@ class PostedMessage:
     comment: TicketComment
     from_reporter: bool
     author_name: str | None
+
+
+@dataclass(frozen=True)
+class EscalateTicketCommand:
+    ticket_id: uuid.UUID
+    actor: Actor
+    specialist_group: SpecialistGroup
+    reason: str
+
+
+@dataclass(frozen=True)
+class ReturnToL1Command:
+    ticket_id: uuid.UUID
+    actor: Actor
+    requested_info: str
+
+
+def _format_escalation_snapshot(
+    *,
+    ticket: Ticket,
+    specialist_group: SpecialistGroup,
+    reason: str,
+    triage: TriageContextSnapshot | None,
+) -> str:
+    """Construye la plantilla determinística de la nota interna de escalamiento (US17, D30 §2.3)."""
+    category_label = ticket.category.value if ticket.category else "Sin categoría"
+    module_label = ticket.affected_module or "No especificado"
+
+    if triage is None:
+        triage_line = f"Triaje IA: {_NO_TRIAGE_SUMMARY}"
+        ocr_line = "Sin evidencia OCR"
+        sources_block = "- Sin fuentes consultadas"
+    else:
+        summary = (triage.summary or "").strip() or _NO_TRIAGE_SUMMARY
+        outcome = triage.outcome or "N/A"
+        confidence = triage.confidence_level or "N/A"
+        score = f"{triage.best_score:.2f}" if triage.best_score is not None else "N/A"
+        triage_line = f"Triaje IA: {summary} (resultado={outcome}, confianza={confidence}, score={score})"
+
+        if triage.ocr_legible is False:
+            ocr_line = "Captura adjunta no legible"
+        else:
+            ocr_parts: list[str] = []
+            if triage.ocr_error_codes:
+                ocr_parts.append(f"Códigos: {', '.join(triage.ocr_error_codes)}")
+            ocr_text = (triage.ocr_masked_text or "").strip()
+            if ocr_text:
+                if len(ocr_text) > MAX_SNAPSHOT_OCR_LENGTH:
+                    ocr_text = ocr_text[:MAX_SNAPSHOT_OCR_LENGTH] + "…"
+                ocr_parts.append(ocr_text)
+            ocr_line = " | ".join(ocr_parts) if ocr_parts else "Sin evidencia OCR"
+
+        if triage.sources:
+            sources_block = "\n".join(
+                f"- [{src.reference}] {src.citation} ({src.document_title})" for src in triage.sources
+            )
+        else:
+            sources_block = "- Sin fuentes consultadas"
+
+    return (
+        f"[ESCALAMIENTO A L2 · {specialist_group.value}]\n"
+        f"Motivo del escalamiento: {reason.strip()}\n"
+        f"Clasificación: Categoría={category_label} | Prioridad={ticket.priority.value} "
+        f"| Impacto={ticket.impact_level.value} | Módulo={module_label}\n"
+        f"{triage_line}\n"
+        f"OCR (anonimizado): {ocr_line}\n"
+        f"Fuentes consultadas:\n"
+        f"{sources_block}"
+    )
+
+
+def _format_return_to_l1_note(*, ticket: Ticket, requested_info: str) -> str:
+    """Construye la plantilla determinística de la nota interna al devolver a L1 (US17, D30 §2.3)."""
+    group_label = ticket.escalated_group.value if ticket.escalated_group else "L2"
+    return (
+        f"[DEVOLUCIÓN DE L2 A L1 · {group_label}]\n"
+        f"Información adicional solicitada: {requested_info.strip()}"
+    )
 
 
 class TicketCommandService:
@@ -98,6 +198,7 @@ class TicketCommandService:
         events: InMemoryEventBus,
         analysts: IAnalystAvailabilityReader | None = None,
         users: IUserDirectory | None = None,
+        triage_context: ITriageContextReader | None = None,
     ) -> None:
         self._session = session
         self._tickets = tickets
@@ -105,6 +206,7 @@ class TicketCommandService:
         self._events = events
         self._analysts = analysts
         self._users = users
+        self._triage_context = triage_context
 
     def register(self, command: RegisterTicketCommand) -> Ticket:
         """Registra un incidente con texto y capturas opcionales (US10, TS04) y publica TicketRegistered."""
@@ -282,6 +384,42 @@ class TicketCommandService:
         self._events.publish_all(ticket.pull_events())
         return ticket
 
+    def accept_self_service(self, command: AcceptSelfServiceCommand) -> Ticket:
+        """El colaborador confirma la solución de autoservicio propuesta (US12, T76).
+
+        Orden de validación: ticket existente en el workspace (404), actor es el reportante (403)
+        y estado SELF_SERVICE_PROPOSED (422). Publica TicketStatusChanged y SelfServiceAccepted.
+        """
+        ticket = self._load_for_self_service_response(command.ticket_id, command.actor)
+        ticket.accept_self_service(reporter_id=command.actor.id)
+        self._tickets.save(ticket)
+        self._session.commit()
+        self._events.publish_all(ticket.pull_events())
+        return ticket
+
+    def reject_self_service(self, command: RejectSelfServiceCommand) -> Ticket:
+        """El colaborador rechaza la recomendación de autoservicio y deriva el caso a soporte L1 (US12, T76).
+
+        Orden de validación: ticket existente en el workspace (404), actor es el reportante (403)
+        y estado SELF_SERVICE_PROPOSED (422). Publica TicketStatusChanged y SelfServiceRejected.
+        """
+        ticket = self._load_for_self_service_response(command.ticket_id, command.actor)
+        ticket.reject_self_service(reporter_id=command.actor.id, reason=command.reason)
+        self._tickets.save(ticket)
+        self._session.commit()
+        self._events.publish_all(ticket.pull_events())
+        return ticket
+
+    def _load_for_self_service_response(self, ticket_id: uuid.UUID, actor: Actor) -> Ticket:
+        ticket = self._tickets.find_by_id(ticket_id)
+        if ticket is None or ticket.workspace_id != actor.workspace_id:
+            raise TicketNotFoundError("El ticket no existe.")
+        if actor.id != ticket.reporter_id:
+            raise TicketStatusChangeForbiddenError(
+                "Solo el colaborador que reportó el incidente puede responder a la recomendación de autoservicio."
+            )
+        return ticket
+
     def stage_resolution(
         self, ticket_id: uuid.UUID, actor: Actor, *, response_text: str, ai_generated: bool
     ) -> list:
@@ -306,3 +444,72 @@ class TicketCommandService:
         ticket.change_status(TicketStatus.RESOLVED, changed_by=actor.id, reason=reason)
         self._tickets.save(ticket)
         return ticket.pull_events()
+
+    def escalate(self, command: EscalateTicketCommand) -> Ticket:
+        """Escala un ticket ASSIGNED_L1 a un grupo especialista L2 con snapshot de contexto (US17, T79).
+
+        Orden de validación (D30 §4.1):
+        1. Ticket existe y pertenece al workspace del actor (404).
+        2. Transición válida hacia ESCALATED_L2 (422).
+        3. Permiso del actor para escalar (403).
+        """
+        actor = command.actor
+        ticket = self._tickets.find_by_id(command.ticket_id)
+        if ticket is None or ticket.workspace_id != actor.workspace_id:
+            raise TicketNotFoundError("El ticket no existe.")
+
+        state_machine.ensure_transition(ticket.status, TicketStatus.ESCALATED_L2)
+        status_change_policy.authorize(actor, ticket, TicketStatus.ESCALATED_L2)
+
+        triage = self._triage_context.for_ticket(ticket.id) if self._triage_context is not None else None
+        snapshot = _format_escalation_snapshot(
+            ticket=ticket,
+            specialist_group=command.specialist_group,
+            reason=command.reason,
+            triage=triage,
+        )
+        ticket.escalate(
+            escalated_by=actor.id,
+            specialist_group=command.specialist_group,
+            reason=command.reason,
+            context_snapshot=snapshot,
+            has_triage_snapshot=triage is not None,
+        )
+        self._tickets.save(ticket)
+        self._session.commit()
+        self._events.publish_all(ticket.pull_events())
+        return ticket
+
+    def return_to_l1(self, command: ReturnToL1Command) -> Ticket:
+        """Devuelve un ticket ESCALATED_L2 al analista L1 original solicitando información (US17, T79).
+
+        Orden de validación (D30 §4.2):
+        1. Ticket existe y pertenece al workspace del actor (404).
+        2. El ticket está en ESCALATED_L2 y admite transición a ASSIGNED_L1 (422).
+        3. Guarda `ensure_can_work_escalated` (permiso + grupo; punto de extensión para reclamo en T82).
+        4. El ticket conserva un assigned_analyst_id original (400 si falta por datos legados).
+        """
+        actor = command.actor
+        ticket = self._tickets.find_by_id(command.ticket_id)
+        if ticket is None or ticket.workspace_id != actor.workspace_id:
+            raise TicketNotFoundError("El ticket no existe.")
+
+        state_machine.ensure_transition(ticket.status, TicketStatus.ASSIGNED_L1)
+        if ticket.status is not TicketStatus.ESCALATED_L2:
+            raise InvalidTicketStateTransitionError(
+                f"Solo se pueden devolver a Nivel 1 los tickets en estado ESCALATED_L2 (estado actual: {ticket.status.value})."
+            )
+
+        actor_group = self._users.specialist_group(actor.id) if self._users is not None else None
+        status_change_policy.ensure_can_work_escalated(actor, ticket, actor_group)
+
+        internal_note = _format_return_to_l1_note(ticket=ticket, requested_info=command.requested_info)
+        ticket.return_to_l1(
+            returned_by=actor.id,
+            requested_info=command.requested_info,
+            internal_note=internal_note,
+        )
+        self._tickets.save(ticket)
+        self._session.commit()
+        self._events.publish_all(ticket.pull_events())
+        return ticket

@@ -2,10 +2,12 @@
 import base64
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from app.helpdesk.application.notifications.notification_service import NotificationListing
+from app.helpdesk.application.ports import SelfServiceRecommendation
 from app.helpdesk.application.ticket_queries import EvidenceFile, MessageView, TicketSummary
 from app.helpdesk.application.ticket_query_service import (
     MessageListing,
@@ -15,7 +17,9 @@ from app.helpdesk.application.ticket_query_service import (
     TicketStatusHistoryView,
 )
 from app.helpdesk.domain.enums import TicketCategory, TicketPriority, TicketStatus
+from app.helpdesk.domain.notification import Notification, NotificationType
 from app.helpdesk.domain.ticket import MAX_MESSAGE_LENGTH, MAX_REASON_LENGTH, Ticket
+from app.shared.domain.specialist_group import SpecialistGroup
 
 
 class EvidenceResponse(BaseModel):
@@ -38,6 +42,10 @@ class TicketResponse(BaseModel):
     current_tier: str
     reporter_id: uuid.UUID
     assigned_analyst_id: uuid.UUID | None
+    escalated_group: str | None = None
+    escalated_at: datetime | None = None
+    assigned_specialist_id: uuid.UUID | None = None
+    specialist_claimed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     resolved_at: datetime | None
@@ -59,6 +67,10 @@ class TicketResponse(BaseModel):
             current_tier=ticket.current_tier.value,
             reporter_id=ticket.reporter_id,
             assigned_analyst_id=ticket.assigned_analyst_id,
+            escalated_group=ticket.escalated_group.value if ticket.escalated_group else None,
+            escalated_at=ticket.escalated_at,
+            assigned_specialist_id=ticket.assigned_specialist_id,
+            specialist_claimed_at=ticket.specialist_claimed_at,
             created_at=ticket.created_at,
             updated_at=ticket.updated_at,
             resolved_at=ticket.resolved_at,
@@ -101,6 +113,62 @@ class AssignTicketRequest(BaseModel):
         max_length=MAX_REASON_LENGTH,
         description="Motivo de la asignación",
         examples=["Asignado a analista disponible"],
+    )
+
+
+class EscalateTicketRequest(BaseModel):
+    """Solicitud para escalar un ticket ASSIGNED_L1 a un grupo especialista L2 (US17)."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "specialist_group": "REDES",
+                    "reason": "El error 809 persiste tras reiniciar el perfil VPN; requiere revisión de firewall corporativo.",
+                }
+            ]
+        },
+    )
+
+    specialist_group: SpecialistGroup = Field(
+        ...,
+        description="Grupo especialista L2 destino: REDES, APLICACIONES, INFRAESTRUCTURA o SEGURIDAD",
+        examples=["REDES"],
+    )
+    reason: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=5, max_length=MAX_REASON_LENGTH),
+    ] = Field(
+        ...,
+        description=f"Motivo del escalamiento (5 a {MAX_REASON_LENGTH} caracteres, sin contar espacios extremos)",
+        examples=["El error 809 persiste tras reiniciar el perfil VPN; requiere revisión de firewall corporativo."],
+    )
+
+
+class ReturnToL1Request(BaseModel):
+    """Solicitud para devolver un ticket ESCALATED_L2 al analista L1 original (US17)."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "requested_info": "Solicitar al colaborador la captura del comando ipconfig /all y confirmar si usa red doméstica o móvil.",
+                }
+            ]
+        },
+    )
+
+    requested_info: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=5, max_length=MAX_MESSAGE_LENGTH),
+    ] = Field(
+        ...,
+        description=f"Información adicional requerida al analista L1 (5 a {MAX_MESSAGE_LENGTH} caracteres)",
+        examples=[
+            "Solicitar al colaborador la captura del comando ipconfig /all y confirmar si usa red doméstica o móvil."
+        ],
     )
 
 
@@ -175,12 +243,85 @@ class CommentResponse(BaseModel):
     created_at: datetime
 
 
+class SelfServiceSourceResponse(BaseModel):
+    """Fuente citada en una recomendación de autoservicio, sin datos internos (US12)."""
+
+    reference: str = Field(..., examples=["F1"])
+    document_title: str = Field(..., examples=["Manual de Conectividad VPN"])
+    citation: str = Field(..., examples=["guia-vpn.md, sección «Error 809», párr. 1"])
+
+
+class SelfServiceRecommendationResponse(BaseModel):
+    """Recomendación de autoservicio expuesta al colaborador cuando el ticket está en SELF_SERVICE_PROPOSED (US12)."""
+
+    summary: str = Field(
+        ..., examples=["El error 809 ocurre cuando el router doméstico bloquea el protocolo L2TP/IPsec."]
+    )
+    steps: list[str] = Field(
+        ...,
+        examples=[
+            [
+                "Abre Configuración de red y selecciona el perfil VPN corporativo.",
+                "Cambia el tipo de protocolo a IKEv2 y guarda los cambios.",
+            ]
+        ],
+    )
+    match_percentage: int | None = Field(
+        None, ge=0, le=100, description="Porcentaje redondeado de coincidencia (0–100)", examples=[89]
+    )
+    confidence_label: str = Field(..., examples=["Alta coincidencia"])
+    sources: list[SelfServiceSourceResponse]
+
+    @classmethod
+    def from_recommendation(cls, rec: SelfServiceRecommendation) -> "SelfServiceRecommendationResponse":
+        return cls(
+            summary=rec.summary,
+            steps=list(rec.steps),
+            match_percentage=rec.match_percentage,
+            confidence_label=rec.confidence_label,
+            sources=[
+                SelfServiceSourceResponse(
+                    reference=s.reference,
+                    document_title=s.document_title,
+                    citation=s.citation,
+                )
+                for s in rec.sources
+            ],
+        )
+
+
+class RejectSelfServiceRequest(BaseModel):
+    """Motivo opcional del colaborador al rechazar una recomendación de autoservicio (US12)."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [{"reason": "Seguí los pasos pero el error 809 continúa apareciendo."}],
+        },
+    )
+
+    reason: Annotated[
+        str | None,
+        StringConstraints(strip_whitespace=True, max_length=MAX_REASON_LENGTH),
+    ] = Field(
+        None,
+        description=f"Motivo opcional del rechazo (máximo {MAX_REASON_LENGTH} caracteres)",
+    )
+
+
 class TicketDetailResponse(TicketResponse):
     """Detalle del ticket (W-05 y W-07): datos completos, nombres y comentarios visibles para el usuario."""
 
     reporter_name: str | None
     assigned_analyst_name: str | None
     comments: list[CommentResponse]
+    self_service_recommendation: SelfServiceRecommendationResponse | None = Field(
+        None,
+        description=(
+            "Recomendación de autoservicio disponible solo cuando el ticket está en SELF_SERVICE_PROPOSED "
+            "con citas válidas; null en cualquier otro estado o ante baja confianza."
+        ),
+    )
 
     @classmethod
     def from_detail(cls, detail: TicketDetail) -> "TicketDetailResponse":
@@ -199,11 +340,17 @@ class TicketDetailResponse(TicketResponse):
             for c in ticket.comments
             if detail.include_internal_notes or not c.is_internal_note
         ]
+        recommendation = (
+            SelfServiceRecommendationResponse.from_recommendation(detail.self_service_recommendation)
+            if detail.self_service_recommendation is not None
+            else None
+        )
         return cls(
             **base,
             reporter_name=names.get(ticket.reporter_id),
             assigned_analyst_name=names.get(ticket.assigned_analyst_id) if ticket.assigned_analyst_id else None,
             comments=comments,
+            self_service_recommendation=recommendation,
         )
 
 
@@ -328,4 +475,58 @@ class MessagePageResponse(BaseModel):
             size=page.size,
             total=page.total,
             total_pages=page.total_pages,
+        )
+
+
+class NotificationResponse(BaseModel):
+    id: uuid.UUID
+    type: NotificationType
+    ticket_id: uuid.UUID
+    ticket_code: str = Field(..., examples=["TK-0042"])
+    title: str = Field(..., examples=["TK-0042: tu ticket está Resuelto"])
+    body: str = Field(
+        ...,
+        examples=["Tu ticket TK-0042 cambió de «En atención» a «Resuelto». Revisa la solución y confírmala."],
+    )
+    data: dict[str, Any]
+    read: bool = Field(..., description="true si ya fue marcada como leída")
+    read_at: datetime | None
+    created_at: datetime
+
+    @classmethod
+    def from_domain(cls, notification: Notification) -> "NotificationResponse":
+        return cls(
+            id=notification.id,
+            type=notification.type,
+            ticket_id=notification.ticket_id,
+            ticket_code=notification.ticket_code,
+            title=notification.title,
+            body=notification.body,
+            data=dict(notification.data),
+            read=notification.is_read,
+            read_at=notification.read_at,
+            created_at=notification.created_at,
+        )
+
+
+class NotificationPageResponse(BaseModel):
+    items: list[NotificationResponse]
+    page: int = Field(..., examples=[1])
+    size: int = Field(..., examples=[20])
+    total: int = Field(..., examples=[3])
+    total_pages: int = Field(..., examples=[1])
+    unread_count: int = Field(
+        ..., description="Total global de notificaciones no leídas del usuario sin importar el filtro o página", examples=[2]
+    )
+
+    @classmethod
+    def from_listing(cls, listing: NotificationListing) -> "NotificationPageResponse":
+        page = listing.page
+        return cls(
+            items=[NotificationResponse.from_domain(n) for n in page.items],
+            page=page.page,
+            size=page.size,
+            total=page.total,
+            total_pages=page.total_pages,
+            unread_count=listing.unread_count,
         )

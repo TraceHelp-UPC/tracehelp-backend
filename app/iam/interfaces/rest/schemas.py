@@ -1,11 +1,23 @@
 """DTOs de entrada y salida del contexto IAM."""
 import uuid
 from datetime import datetime
+from decimal import Decimal
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationInfo, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 
+from app.iam.application.workspace_settings_service import RagSettingsView
 from app.iam.domain.enums import AvailabilityStatus, RoleName, UserStatus
 from app.iam.domain.user import User
+from app.iam.domain.workspace_settings import (
+    MAX_RETRIEVAL_TOP_K,
+    MAX_SELF_SERVICE_THRESHOLD,
+    MAX_SIMILARITY_THRESHOLD,
+    MIN_RETRIEVAL_TOP_K,
+    MIN_SIMILARITY_THRESHOLD,
+    SIMILARITY_WARNING_BELOW,
+)
 from app.shared.domain.pagination import Page
 from app.shared.domain.specialist_group import SpecialistGroup
 
@@ -188,3 +200,169 @@ class UpdateUserRequest(BaseModel):
             if name in self.model_fields_set and getattr(self, name) is None:
                 raise ValueError(f"{name} no puede ser null.")
         return self
+
+
+# ----------------------------------------------------------------------------- preferencias de notificación (US19)
+class NotificationPreferencesResponse(BaseModel):
+    notify_inapp: bool = Field(..., description="Notificaciones dentro de la aplicación", examples=[True])
+    notify_email: bool = Field(..., description="Notificaciones por correo electrónico", examples=[True])
+
+    @classmethod
+    def from_domain(cls, user: User) -> "NotificationPreferencesResponse":
+        return cls(notify_inapp=user.notify_inapp, notify_email=user.notify_email)
+
+
+class UpdateNotificationPreferencesRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"notify_email": False}, {"notify_inapp": True, "notify_email": True}]},
+    )
+
+    notify_inapp: StrictBool | None = Field(None, description="Activar o desactivar notificaciones en la aplicación")
+    notify_email: StrictBool | None = Field(None, description="Activar o desactivar notificaciones por correo")
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "UpdateNotificationPreferencesRequest":
+        if not self.model_fields_set:
+            raise ValueError("Envía al menos un canal de notificación para actualizar.")
+        for name in ("notify_inapp", "notify_email"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"{name} no puede ser null.")
+        return self
+
+
+# ----------------------------------------------------------------------------- configuración del workspace (US07)
+class RagDefaultsResponse(BaseModel):
+    similarity_threshold: float
+    self_service_threshold: float
+    retrieval_top_k: int
+    strict_grounding: bool
+
+
+class SimilarityThresholdLimits(BaseModel):
+    min: float = MIN_SIMILARITY_THRESHOLD
+    max: float = MAX_SIMILARITY_THRESHOLD
+    step: float = 0.01
+    warning_below: float = SIMILARITY_WARNING_BELOW
+
+
+class SelfServiceThresholdLimits(BaseModel):
+    min: str = "similarity_threshold"
+    max: float = MAX_SELF_SERVICE_THRESHOLD
+    step: float = 0.01
+
+
+class RetrievalTopKLimits(BaseModel):
+    min: int = MIN_RETRIEVAL_TOP_K
+    max: int = MAX_RETRIEVAL_TOP_K
+
+
+class RagLimitsResponse(BaseModel):
+    similarity_threshold: SimilarityThresholdLimits = Field(default_factory=SimilarityThresholdLimits)
+    self_service_threshold: SelfServiceThresholdLimits = Field(default_factory=SelfServiceThresholdLimits)
+    retrieval_top_k: RetrievalTopKLimits = Field(default_factory=RetrievalTopKLimits)
+
+
+class RagSettingsResponse(BaseModel):
+    """Configuración efectiva del motor RAG del workspace (D26). Los umbrales se serializan como float JSON."""
+
+    similarity_threshold: float = Field(
+        ..., description="Umbral mínimo de similitud para fundamentar respuestas RAG (0.50 a 0.95)"
+    )
+    self_service_threshold: float = Field(
+        ..., description="Umbral mínimo de confianza para proponer autoservicio directo (≥ similarity_threshold y ≤ 0.99)"
+    )
+    retrieval_top_k: int = Field(..., description="Cantidad máxima de fragmentos recuperados por consulta (1 a 10)")
+    strict_grounding: bool = Field(
+        ..., description="Si es true, descarta toda respuesta de la IA que no cite al menos un fragmento válido"
+    )
+    is_default: bool = Field(
+        ..., description="true si el workspace usa los valores por defecto (sin configuración RAG guardada)"
+    )
+    updated_at: datetime | None = Field(None, description="Fecha y hora de última modificación (UTC); null si usa defaults")
+    updated_by: uuid.UUID | None = Field(None, description="ID del líder que modificó la configuración; null si usa defaults")
+    updated_by_name: str | None = Field(None, description="Nombre del usuario que realizó la última modificación")
+    defaults: RagDefaultsResponse = Field(..., description="Valores por defecto del motor RAG")
+    limits: RagLimitsResponse = Field(
+        default_factory=RagLimitsResponse, description="Rangos permitidos y avisos de calibración para la UI"
+    )
+
+    @classmethod
+    def from_view(cls, view: RagSettingsView) -> "RagSettingsResponse":
+        return cls(
+            similarity_threshold=float(view.rag.similarity_threshold),
+            self_service_threshold=float(view.rag.self_service_threshold),
+            retrieval_top_k=view.rag.retrieval_top_k,
+            strict_grounding=view.rag.strict_grounding,
+            is_default=view.is_default,
+            updated_at=view.updated_at,
+            updated_by=view.updated_by,
+            updated_by_name=view.updated_by_name,
+            defaults=RagDefaultsResponse(
+                similarity_threshold=float(view.defaults.similarity_threshold),
+                self_service_threshold=float(view.defaults.self_service_threshold),
+                retrieval_top_k=view.defaults.retrieval_top_k,
+                strict_grounding=view.defaults.strict_grounding,
+            ),
+        )
+
+
+class UpdateRagSettingsRequest(BaseModel):
+    """Cuerpo de PUT /api/v1/config/rag (reemplazo completo de los 4 parámetros RAG)."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "similarity_threshold": 0.72,
+                    "self_service_threshold": 0.85,
+                    "retrieval_top_k": 5,
+                    "strict_grounding": True,
+                }
+            ]
+        },
+    )
+
+    similarity_threshold: Annotated[
+        Decimal,
+        Field(
+            ge=Decimal("0.50"),
+            le=Decimal("0.95"),
+            decimal_places=2,
+            description="Umbral de fundamentación RAG (entre 0.50 y 0.95, máximo 2 decimales)",
+        ),
+    ]
+    self_service_threshold: Annotated[
+        Decimal,
+        Field(
+            le=Decimal("0.99"),
+            decimal_places=2,
+            description="Umbral de autoservicio directo (mayor o igual a similarity_threshold y hasta 0.99, máximo 2 decimales)",
+        ),
+    ]
+    retrieval_top_k: Annotated[
+        int,
+        Field(ge=1, le=10, description="Número máximo de fragmentos de manuales recuperados por consulta (1 a 10)"),
+    ]
+    strict_grounding: bool = Field(
+        ..., description="Si es true, rechaza diagnósticos de la IA sin citas válidas a los manuales"
+    )
+
+    @field_validator("self_service_threshold")
+    @classmethod
+    def _validate_self_service_vs_similarity(cls, value: Decimal, info: ValidationInfo) -> Decimal:
+        similarity = info.data.get("similarity_threshold")
+        if similarity is not None and value < similarity:
+            raise PydanticCustomError(
+                "self_service_below_similarity",
+                "debe ser mayor o igual que el umbral de fundamentación ({similarity})",
+                {"similarity": f"{similarity:.2f}"},
+            )
+        if similarity is None and value < Decimal("0.50"):
+            raise PydanticCustomError(
+                "greater_than_equal",
+                "debe ser mayor o igual que {ge}",
+                {"ge": "0.50"},
+            )
+        return value

@@ -57,3 +57,58 @@ class MessagePosted(DomainEvent):
     is_internal_note: bool
     ticket_status: str
     content_length: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class EscalatedTicketResolved(DomainEvent):
+    """Un especialista L2 resolvió un ticket escalado (US25/D08). Creado en T91 y emitido en T82."""
+
+    ticket_id: uuid.UUID
+    workspace_id: uuid.UUID
+    reporter_id: uuid.UUID
+    resolved_by: uuid.UUID
+    escalated_group: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class TicketEscalated(DomainEvent):
+    """Se emite cuando un analista L1 escala un ticket a un grupo especialista L2 (US17, T79)."""
+
+    ticket_id: uuid.UUID
+    workspace_id: uuid.UUID
+    escalated_by: uuid.UUID
+    specialist_group: str
+    assigned_analyst_id: uuid.UUID | None
+    has_triage_snapshot: bool
+    reason: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class TicketReturnedToL1(DomainEvent):
+    """Se emite cuando un especialista L2 devuelve un ticket escalado al analista L1 original (US17, T79)."""
+
+    ticket_id: uuid.UUID
+    workspace_id: uuid.UUID
+    returned_by: uuid.UUID
+    assigned_analyst_id: uuid.UUID | None
+    escalated_group: str | None
+    reason: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class SelfServiceAccepted(DomainEvent):
+    """El colaborador confirmó que la recomendación de autoservicio resolvió el incidente (US12, T76)."""
+
+    ticket_id: uuid.UUID
+    workspace_id: uuid.UUID
+    reporter_id: uuid.UUID
+
+
+@dataclass(frozen=True, kw_only=True)
+class SelfServiceRejected(DomainEvent):
+    """El colaborador rechazó la recomendación de autoservicio y derivó el incidente a soporte L1 (US12, T76)."""
+
+    ticket_id: uuid.UUID
+    workspace_id: uuid.UUID
+    reporter_id: uuid.UUID
+    reason: str | None = None
