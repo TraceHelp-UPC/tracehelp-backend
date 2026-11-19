@@ -5,14 +5,15 @@ from datetime import UTC, datetime
 
 from app.helpdesk.domain.enums import ImpactLevel, SupportTier, TicketCategory, TicketPriority, TicketStatus
 from app.helpdesk.domain import state_machine
-from app.helpdesk.domain.events import TicketClassificationCorrected, TicketRegistered, TicketStatusChanged
-from app.helpdesk.domain.exceptions import InvalidTicketDataError
+from app.helpdesk.domain.events import MessagePosted, TicketClassificationCorrected, TicketRegistered, TicketStatusChanged
+from app.helpdesk.domain.exceptions import InvalidTicketDataError, TicketClosedError
 from app.helpdesk.domain.value_objects import VisualEvidence
 from app.shared.domain.aggregate_root import AggregateRoot
 
 MAX_TITLE_LENGTH = 200
 MAX_EVIDENCES = 5
 MAX_REASON_LENGTH = 500
+MAX_MESSAGE_LENGTH = 2000  # solo aplica a los mensajes de la conversación (US26), no a add_comment (HITL)
 
 # Prioridad inicial según el impacto declarado; el triaje (US27) puede ajustarla después
 PRIORITY_BY_IMPACT = {
@@ -178,6 +179,49 @@ class Ticket(AggregateRoot):
         )
         self.comments.append(comment)
         self.updated_at = _now()
+        return comment
+
+    def post_message(
+        self,
+        *,
+        author_id: uuid.UUID,
+        content: str,
+        is_internal_note: bool = False,
+        author_is_reporter: bool = False,
+    ) -> TicketComment:
+        """Registra un mensaje o nota interna de la conversación del ticket (US26) y emite MessagePosted.
+
+        No se admite en un ticket CLOSED. El límite de MAX_MESSAGE_LENGTH aplica solo aquí: la respuesta
+        validada del HITL se guarda con add_comment y puede ser más larga. El permiso para marcar una nota
+        interna es una regla de autorización y lo valida la capa de aplicación.
+        """
+        if self.status is TicketStatus.CLOSED:
+            raise TicketClosedError(f"El ticket {self.code} está cerrado y ya no admite mensajes.")
+        text = (content or "").strip()
+        if not text:
+            raise InvalidTicketDataError("El mensaje no puede estar vacío.")
+        if len(text) > MAX_MESSAGE_LENGTH:
+            raise InvalidTicketDataError(f"El mensaje no puede superar los {MAX_MESSAGE_LENGTH} caracteres.")
+
+        comment = self.add_comment(
+            author_id=author_id, content=text, is_internal_note=is_internal_note, is_ai_generated=False
+        )
+        # El evento no lleva el texto: lo consumen la auditoría y las notificaciones (D22)
+        self.record_event(
+            MessagePosted(
+                ticket_id=self.id,
+                workspace_id=self.workspace_id,
+                message_id=comment.id,
+                ticket_code=self.code or "",
+                author_id=author_id,
+                reporter_id=self.reporter_id,
+                assigned_analyst_id=self.assigned_analyst_id,
+                author_is_reporter=author_is_reporter,
+                is_internal_note=is_internal_note,
+                ticket_status=self.status.value,
+                content_length=len(text),
+            )
+        )
         return comment
 
     def change_status(

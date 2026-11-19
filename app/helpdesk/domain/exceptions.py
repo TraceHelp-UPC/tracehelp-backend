@@ -28,3 +28,11 @@ class TicketAccessDeniedError(DomainError):
 
 class EvidenceNotFoundError(ResourceNotFoundError):
     """La captura no existe o no pertenece al ticket (HTTP 404)."""
+
+
+class InternalNoteNotAllowedError(DomainError):
+    """Solo el equipo de soporte puede registrar notas internas (HTTP 403)."""
+
+
+class TicketClosedError(DomainError):
+    """El ticket está CLOSED y ya no admite mensajes (HTTP 409)."""

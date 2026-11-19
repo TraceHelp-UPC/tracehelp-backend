@@ -22,6 +22,7 @@ def get_ticket_command_service(
         images=PillowImageProcessor(),
         events=bus,
         analysts=IamUserDirectory(db),
+        users=IamUserDirectory(db),
     )
 
 
