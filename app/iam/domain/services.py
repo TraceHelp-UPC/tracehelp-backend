@@ -12,3 +12,9 @@ class IPasswordHasher(ABC):
     @abstractmethod
     def verify(self, plain: str, password_hash: PasswordHash) -> bool:
         """Compara una contraseña ingresada con el hash almacenado."""
+
+
+class ITemporaryPasswordGenerator(ABC):
+    @abstractmethod
+    def generate(self) -> PlainPassword:
+        """Genera una contraseña temporal aleatoria que cumple la política. No debe registrarla en ningún lado."""

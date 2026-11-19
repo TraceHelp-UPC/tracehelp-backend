@@ -1,14 +1,16 @@
 """Implementación SQLAlchemy del repositorio de usuarios. No hace commit: lo controla la capa de aplicación."""
 import uuid
 
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.iam.domain.enums import RoleName
-from app.iam.domain.repositories import IUserRepository
+from app.iam.domain.enums import UserStatus
+from app.iam.domain.repositories import IUserRepository, UserSearchCriteria
 from app.iam.domain.user import SUPPORT_ROLES, User
 from app.iam.domain.value_objects import EmailAddress, PasswordHash
 from app.iam.infrastructure.persistence.models import UserModel
+from app.shared.domain.pagination import Page, PageRequest
 
 _FIELDS = (
     "workspace_id",
@@ -21,6 +23,7 @@ _FIELDS = (
     "notify_inapp",
     "created_at",
     "last_login_at",
+    "specialist_group",
 )
 
 
@@ -58,6 +61,35 @@ class SqlAlchemyUserRepository(IUserRepository):
             .order_by(UserModel.full_name.asc())
         )
         return [self._to_domain(m) for m in self._session.scalars(stmt).all()]
+
+    def search(self, criteria: UserSearchCriteria, page: PageRequest) -> Page[User]:
+        conditions = [UserModel.workspace_id == criteria.workspace_id]
+        if criteria.role is not None:
+            conditions.append(UserModel.role == criteria.role)
+        if criteria.specialist_group is not None:
+            conditions.append(UserModel.specialist_group == criteria.specialist_group)
+        if criteria.is_active is True:
+            conditions.append(UserModel.status == UserStatus.ACTIVE)
+        elif criteria.is_active is False:
+            conditions.append(UserModel.status != UserStatus.ACTIVE)
+        term = (criteria.search or "").strip()
+        if term:
+            escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
+            conditions.append(
+                or_(UserModel.full_name.ilike(pattern, escape="\\"), UserModel.email.ilike(pattern, escape="\\"))
+            )
+        total = self._session.scalar(select(func.count()).select_from(UserModel).where(*conditions)) or 0
+        page.ensure_in_range(total)
+        stmt = (
+            select(UserModel)
+            .where(*conditions)
+            .order_by(UserModel.full_name.asc(), UserModel.id.asc())
+            .offset(page.offset)
+            .limit(page.size)
+        )
+        items = [self._to_domain(m) for m in self._session.scalars(stmt).all()]
+        return Page(items=items, page=page.page, size=page.size, total=total)
 
     @staticmethod
     def _to_domain(model: UserModel) -> User:

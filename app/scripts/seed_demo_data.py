@@ -18,6 +18,7 @@ from app.iam.domain.value_objects import EmailAddress, PlainPassword
 from app.iam.infrastructure.persistence.models import WorkspaceModel
 from app.iam.infrastructure.persistence.user_repository import SqlAlchemyUserRepository
 from app.iam.infrastructure.security.bcrypt_password_hasher import BcryptPasswordHasher
+from app.shared.domain.specialist_group import SpecialistGroup
 
 WORKSPACE = {"name": "Empresa Demo S.A.C.", "subdomain": "demo"}
 DEFAULT_PASSWORD = "TraceHelp2026"
@@ -28,6 +29,21 @@ USERS = [
     ("Carlos Reátegui", "especialista@demo.tracehelp.pe", RoleName.SPECIALIST_L2, "Infraestructura"),
     ("Roberto Pérez", "lider@demo.tracehelp.pe", RoleName.IT_LEADER, "Gerencia de TI"),
 ]
+
+# Grupo del especialista demo (D15): paso idempotente que nunca pisa un grupo ya asignado
+DEMO_SPECIALIST_EMAIL = "especialista@demo.tracehelp.pe"
+DEMO_SPECIALIST_GROUP = SpecialistGroup.INFRAESTRUCTURA
+
+
+def _assign_demo_specialist_group(users: SqlAlchemyUserRepository) -> None:
+    """Si el especialista demo ya existía sin grupo, le asigna INFRAESTRUCTURA. Idempotente."""
+    specialist = users.find_by_email(EmailAddress(DEMO_SPECIALIST_EMAIL))
+    if specialist is None or specialist.role is not RoleName.SPECIALIST_L2 or specialist.specialist_group is not None:
+        return
+    specialist.assign_specialist_group(DEMO_SPECIALIST_GROUP)
+    specialist.pull_events()  # el seed no es una acción del líder: no se audita
+    users.save(specialist)
+    print(f"Grupo asignado: {DEMO_SPECIALIST_EMAIL} -> {DEMO_SPECIALIST_GROUP.value}")
 
 
 def seed(password: str) -> None:
@@ -57,9 +73,11 @@ def seed(password: str) -> None:
                     password_hash=hasher.hash(plain),
                     role=role,
                     department=department,
+                    specialist_group=DEMO_SPECIALIST_GROUP if email == DEMO_SPECIALIST_EMAIL else None,
                 )
             )
             print(f"Usuario creado: {email} ({role.value})")
+        _assign_demo_specialist_group(users)
         session.commit()
     print(f"Listo. Contraseña de los usuarios nuevos: {password}")
 
